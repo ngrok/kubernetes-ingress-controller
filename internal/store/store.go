@@ -1,9 +1,12 @@
 /*
 Copyright 2017 The Kubernetes Authors.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
+
     http://www.apache.org/licenses/LICENSE-2.0
+
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,6 +41,8 @@ type ErrNotFound struct {
 	message string
 }
 
+// TODO: Make a more generically useable errors pkg for the project and move this there
+// Also add a helper IsNotFound check
 func (e ErrNotFound) Error() string {
 	if e.message == "" {
 		return "not found"
@@ -61,8 +66,8 @@ type Storer interface {
 // be synced and updated by the caller.
 // It is ingressClass filter aware.
 type Store struct {
-	stores        CacheStores
-	ingressCla2ss string
+	stores       CacheStores
+	ingressClass string
 }
 
 var _ Storer = Store{}
