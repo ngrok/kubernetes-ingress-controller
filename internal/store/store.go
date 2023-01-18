@@ -139,6 +139,40 @@ func NewCacheStoresFromObjs(objs ...runtime.Object) (CacheStores, error) {
 	return c, nil
 }
 
+// New creates a new object store to be used in the ingress controller.
+func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 bool, processClasslessIngressV1 bool,
+	processClasslessKongConsumer bool, // logger logrus.FieldLogger,
+) Storer {
+	// 	var ingressV1Beta1ClassMatching annotations.ClassMatching
+	// 	var ingressV1ClassMatching annotations.ClassMatching
+	// 	var kongConsumerClassMatching annotations.ClassMatching
+	// 	if processClasslessIngressV1Beta1 {
+	// 		ingressV1Beta1ClassMatching = annotations.ExactOrEmptyClassMatch
+	// 	} else {
+	// 		ingressV1Beta1ClassMatching = annotations.ExactClassMatch
+	// 	}
+	// 	if processClasslessIngressV1 {
+	// 		ingressV1ClassMatching = annotations.ExactOrEmptyClassMatch
+	// 	} else {
+	// 		ingressV1ClassMatching = annotations.ExactClassMatch
+	// 	}
+	// 	if processClasslessKongConsumer {
+	// 		kongConsumerClassMatching = annotations.ExactOrEmptyClassMatch
+	// 	} else {
+	// 		kongConsumerClassMatching = annotations.ExactClassMatch
+	// 	}
+	return Store{
+		stores: cs,
+		// 		ingressClass:                ingressClass,
+		// 		ingressV1Beta1ClassMatching: ingressV1Beta1ClassMatching,
+		// 		ingressV1ClassMatching:      ingressV1ClassMatching,
+		// 		kongConsumerClassMatching:   kongConsumerClassMatching,
+		// 		isValidIngressClass:         annotations.IngressClassValidatorFuncFromObjectMeta(ingressClass),
+		// 		isValidIngressV1Class:       annotations.IngressClassValidatorFuncFromV1Ingress(ingressClass),
+		// 		logger:                      logger,
+	}
+}
+
 // Get checks whether or not there's already some version of the provided object present in the cache.
 // The CacheStore must be initialized (see NewCacheStores()) or this will panic.
 func (c CacheStores) Get(obj runtime.Object) (item interface{}, exists bool, err error) {

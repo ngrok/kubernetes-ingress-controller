@@ -44,6 +44,7 @@ import (
 	"github.com/ngrok/ngrok-ingress-controller/internal/annotations"
 	"github.com/ngrok/ngrok-ingress-controller/internal/controllers"
 	"github.com/ngrok/ngrok-ingress-controller/internal/ngrokapi"
+	"github.com/ngrok/ngrok-ingress-controller/internal/store"
 	"github.com/ngrok/ngrok-ingress-controller/pkg/tunneldriver"
 	//+kubebuilder:scaffold:imports
 )
@@ -133,6 +134,8 @@ func runController(ctx context.Context, opts managerOpts) error {
 	}
 
 	ngrokClientset := ngrokapi.NewClientSet(ngrokClientConfig)
+	store := store.New(
+	storeParseer := store.NewParser()
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
