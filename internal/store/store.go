@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	ingressv1alpha1 "github.com/ngrok/ngrok-ingress-controller/api/v1alpha1"
+	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
 	"gopkg.in/yaml.v2"
 
 	netv1 "k8s.io/api/networking/v1"
