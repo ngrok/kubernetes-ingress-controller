@@ -189,26 +189,34 @@ func runController(ctx context.Context, opts managerOpts) error {
 		os.Exit(1)
 	}
 	if err = (&controllers.TCPEdgeReconciler{
-		Client:                   mgr.GetClient(),
-		Log:                      ctrl.Log.WithName("controllers").WithName("tcp-edge"),
-		Scheme:                   mgr.GetScheme(),
-		Recorder:                 mgr.GetEventRecorderFor("tcp-edge-controller"),
-		TCPEdgeClient:            ngrokClientset.TCPEdges(),
-		TunnelGroupBackendClient: ngrokClientset.TunnelGroupBackends(),
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("tcp-edge"),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("tcp-edge-controller"),
+		NgrokClientset: ngrokClientset,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TCPEdge")
 		os.Exit(1)
 	}
 	if err = (&controllers.HTTPSEdgeReconciler{
-		Client:                   mgr.GetClient(),
-		Log:                      ctrl.Log.WithName("controllers").WithName("https-edge"),
-		Scheme:                   mgr.GetScheme(),
-		Recorder:                 mgr.GetEventRecorderFor("https-edge-controller"),
-		HTTPSEdgeClient:          ngrokClientset.HTTPSEdges(),
-		HTTPSEdgeRoutesClient:    ngrokClientset.HTTPSEdgeRoutes(),
-		TunnelGroupBackendClient: ngrokClientset.TunnelGroupBackends(),
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("https-edge"),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("https-edge-controller"),
+		NgrokClientset: ngrokClientset,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HTTPSEdge")
+		os.Exit(1)
+	}
+	if err = (&controllers.IPPolicyReconciler{
+		Client:              mgr.GetClient(),
+		Log:                 ctrl.Log.WithName("controllers").WithName("ip-policy"),
+		Scheme:              mgr.GetScheme(),
+		Recorder:            mgr.GetEventRecorderFor("ip-policy-controller"),
+		IPPoliciesClient:    ngrokClientset.IPPolicies(),
+		IPPolicyRulesClient: ngrokClientset.IPPolicyRules(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "IPPolicy")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

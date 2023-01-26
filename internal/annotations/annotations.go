@@ -18,10 +18,12 @@ package annotations
 
 import (
 	"github.com/imdario/mergo"
-	ingressv1alpha1 "github.com/ngrok/ngrok-ingress-controller/api/v1alpha1"
-	"github.com/ngrok/ngrok-ingress-controller/internal/annotations/compression"
-	"github.com/ngrok/ngrok-ingress-controller/internal/annotations/parser"
-	"github.com/ngrok/ngrok-ingress-controller/internal/errors"
+	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations/compression"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations/headers"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations/ip_policies"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations/parser"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 	networking "k8s.io/api/networking/v1"
 	"k8s.io/klog/v2"
 )
@@ -30,7 +32,9 @@ import (
 const DeniedKeyName = "Denied"
 
 type RouteModules struct {
-	Compression *ingressv1alpha1.EndpointCompression
+	Compression   *ingressv1alpha1.EndpointCompression
+	Headers       *ingressv1alpha1.EndpointHeaders
+	IPRestriction *ingressv1alpha1.EndpointIPPolicy
 }
 
 type Extractor struct {
@@ -40,7 +44,9 @@ type Extractor struct {
 func NewAnnotationsExtractor() Extractor {
 	return Extractor{
 		annotations: map[string]parser.IngressAnnotation{
-			"Compression": compression.NewParser(),
+			"Compression":   compression.NewParser(),
+			"Headers":       headers.NewParser(),
+			"IPRestriction": ip_policies.NewParser(),
 		},
 	}
 }

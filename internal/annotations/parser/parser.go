@@ -17,12 +17,13 @@ limitations under the License.
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/ngrok/ngrok-ingress-controller/internal/errors"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 	networking "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -65,6 +66,40 @@ func (a ingAnnotations) parseString(name string) (string, error) {
 		return s, nil
 	}
 	return "", errors.ErrMissingAnnotations
+}
+
+func (a ingAnnotations) parseStringSlice(name string) ([]string, error) {
+	val, ok := a[name]
+	if ok {
+		s := normalizeString(val)
+		if len(s) == 0 {
+			return []string{}, errors.NewInvalidAnnotationContent(name, val)
+		}
+
+		// Remove spaces around each element
+		values := []string{}
+		for _, v := range strings.Split(s, ",") {
+			values = append(values, strings.TrimSpace(v))
+		}
+
+		return values, nil
+	}
+	return []string{}, errors.ErrMissingAnnotations
+}
+
+func (a ingAnnotations) parseStringMap(name string) (map[string]string, error) {
+	val, ok := a[name]
+	if !ok {
+		return nil, errors.ErrMissingAnnotations
+	}
+
+	m := map[string]string{}
+	err := json.Unmarshal([]byte(val), &m)
+	if err != nil {
+		return nil, errors.NewInvalidAnnotationContent(name, val)
+	}
+
+	return m, nil
 }
 
 func (a ingAnnotations) parseInt(name string) (int, error) {
@@ -121,6 +156,26 @@ func GetStringAnnotation(name string, ing *networking.Ingress) (string, error) {
 	}
 
 	return ingAnnotations(ing.GetAnnotations()).parseString(v)
+}
+
+func GetStringSliceAnnotation(name string, ing *networking.Ingress) ([]string, error) {
+	v := GetAnnotationWithPrefix(name)
+	err := checkAnnotation(v, ing)
+	if err != nil {
+		return []string{}, err
+	}
+
+	return ingAnnotations(ing.GetAnnotations()).parseStringSlice(v)
+}
+
+func GetStringMapAnnotation(name string, ing *networking.Ingress) (map[string]string, error) {
+	v := GetAnnotationWithPrefix(name)
+	err := checkAnnotation(v, ing)
+	if err != nil {
+		return nil, err
+	}
+
+	return ingAnnotations(ing.GetAnnotations()).parseStringMap(v)
 }
 
 // GetIntAnnotation extracts an int from an Ingress annotation

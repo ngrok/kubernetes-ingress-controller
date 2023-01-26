@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	ingressv1alpha1 "github.com/ngrok/ngrok-ingress-controller/api/v1alpha1"
-	"github.com/ngrok/ngrok-ingress-controller/internal/annotations"
-	internalerrors "github.com/ngrok/ngrok-ingress-controller/internal/errors"
+	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
+	internalerrors "github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 	v1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -112,7 +112,9 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (irec *IngressReconciler) DeleteDependents(ctx context.Context, ingress *netv1.Ingress) error {
-	// TODO: delete dependent resources
+	// TODO: Currently this controller "owns" the HTTPSEdge and Tunnel objects so deleting an ingress
+	// will delete the HTTPSEdge and Tunnel objects. Once multiple ingress objects combine to form 1 edge
+	// this logic will need to be smarter
 	return nil
 }
 
@@ -150,7 +152,7 @@ func (irec *IngressReconciler) routesPlanner(ctx context.Context, ingress *netv1
 	var matchType string
 	var ngrokRoutes []ingressv1alpha1.HTTPSEdgeRouteSpec
 
-	parsedAnnotations := irec.AnnotationsExtractor.Extract(ingress)
+	parsedRouteModules := irec.AnnotationsExtractor.Extract(ingress)
 
 	for _, httpIngressPath := range rule.HTTP.Paths {
 		switch *httpIngressPath.PathType {
@@ -170,7 +172,9 @@ func (irec *IngressReconciler) routesPlanner(ctx context.Context, ingress *netv1
 			Backend: ingressv1alpha1.TunnelGroupBackend{
 				Labels: backendToLabelMap(httpIngressPath.Backend, namespace),
 			},
-			Compression: parsedAnnotations.Compression,
+			Compression:   parsedRouteModules.Compression,
+			IPRestriction: parsedRouteModules.IPRestriction,
+			Headers:       parsedRouteModules.Headers,
 		}
 
 		ngrokRoutes = append(ngrokRoutes, route)
