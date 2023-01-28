@@ -123,3 +123,12 @@ func backendToLabelMap(backend netv1.IngressBackend, namespace string) map[strin
 		"k8s.ngrok.com/port":      strconv.Itoa(int(backend.Service.Port.Number)),
 	}
 }
+
+func justGetIngress(ctx context.Context, c client.Client, namespacedName types.NamespacedName) (*netv1.Ingress, error) {
+	ingress := &netv1.Ingress{}
+	if err := c.Get(ctx, namespacedName, ingress); err != nil {
+		return nil, err
+	}
+
+	return ingress, nil
+}

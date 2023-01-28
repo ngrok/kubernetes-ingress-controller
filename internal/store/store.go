@@ -141,7 +141,8 @@ func NewCacheStoresFromObjs(objs ...runtime.Object) (CacheStores, error) {
 
 // New creates a new object store to be used in the ingress controller.
 func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 bool, processClasslessIngressV1 bool,
-	processClasslessKongConsumer bool, // logger logrus.FieldLogger,
+
+// logger logrus.FieldLogger,
 ) Storer {
 	// 	var ingressV1Beta1ClassMatching annotations.ClassMatching
 	// 	var ingressV1ClassMatching annotations.ClassMatching
@@ -252,6 +253,7 @@ func (c CacheStores) Delete(obj runtime.Object) error {
 }
 
 // GetIngressClassV1 returns the 'name' IngressClass resource.
+// TODO: Should validate the ingress object the same way the func validateIngress in main does
 func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 	p, exists, err := s.stores.IngressClassV1.GetByKey(name)
 	if err != nil {

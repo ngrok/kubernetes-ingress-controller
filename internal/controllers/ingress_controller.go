@@ -11,6 +11,7 @@ import (
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	internalerrors "github.com/ngrok/kubernetes-ingress-controller/internal/errors"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
 	v1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +37,7 @@ type IngressReconciler struct {
 	Recorder             record.EventRecorder
 	Namespace            string
 	AnnotationsExtractor annotations.Extractor
+	Driver               *store.Driver
 }
 
 // Create a new controller using our reconciler and set it up with the manager
@@ -70,18 +72,29 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := irec.Log.WithValues("ingress", req.NamespacedName)
 	ctx = ctrl.LoggerInto(ctx, log)
-	ingress, err := getIngress(ctx, irec.Client, req.NamespacedName)
+	ingress, err := justGetIngress(ctx, irec.Client, req.NamespacedName)
+
+	// If the ingress doesn't exist, delete it from the store and be done
+	// TODO: This should never trigger because of our predicate filter
+	if client.IgnoreNotFound(err) != nil {
+		err := irec.Driver.DeleteIngress(req.NamespacedName)
+		if err != nil {
+			log.Error(err, "Failed to delete ingress from store")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	if err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		log.Error(err, "Failed to get ingress")
+		return ctrl.Result{}, err
 	}
-	// getIngress didn't return the object, so we can't do anything with it
-	if ingress == nil {
-		return ctrl.Result{}, nil
-	}
-	if err := validateIngress(ctx, ingress); err != nil {
-		irec.Recorder.Event(ingress, v1.EventTypeWarning, "Invalid ingress, discarding the event.", err.Error())
-		return ctrl.Result{}, nil
-	}
+
+	// TODO: Validation should be done in the store and filtered at the add/get operations
+	// if err := validateIngress(ctx, ingress); err != nil {
+	// 	irec.Recorder.Event(ingress, v1.EventTypeWarning, "Invalid ingress, discarding the event.", err.Error())
+	// 	return ctrl.Result{}, nil
+	// }
 
 	if ingress.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The object is not being deleted, so register and sync finalizer
@@ -102,10 +115,24 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{}, err
 			}
+
+			// Remove the ingress object from the store
+			err := irec.Driver.DeleteIngress(req.NamespacedName)
+			if err != nil {
+				log.Error(err, "Failed to delete ingress from store")
+				return ctrl.Result{}, err
+			}
 		}
 
 		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
+	}
+
+	// Otherwise, update everything
+	err = irec.Driver.Add(ingress)
+	if err != nil {
+		log.Error(err, "Failed to add ingress to store")
+		return ctrl.Result{}, err
 	}
 
 	return irec.reconcileAll(ctx, ingress)

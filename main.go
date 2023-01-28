@@ -37,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/ngrok/ngrok-api-go/v5"
 
@@ -44,7 +45,9 @@ import (
 	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/controllers"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/ngrokapi"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
 	"github.com/ngrok/kubernetes-ingress-controller/pkg/tunneldriver"
+	netv1 "k8s.io/api/networking/v1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -133,9 +136,6 @@ func runController(ctx context.Context, opts managerOpts) error {
 	}
 
 	ngrokClientset := ngrokapi.NewClientSet(ngrokClientConfig)
-	// store := store.New(
-	// storeParseer := store.NewParser()
-
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		MetricsBindAddress:     opts.metricsAddr,
@@ -148,6 +148,16 @@ func runController(ctx context.Context, opts managerOpts) error {
 		return fmt.Errorf("unable to start manager: %w", err)
 	}
 
+	driver, err := getDriver(mgr)
+	if err != nil {
+		return fmt.Errorf("unable to create Driver: %w", err)
+	}
+
+	ings := driver.Store.ListIngressesV1()
+	for _, ing := range ings {
+		setupLog.Info("found ingress", "ingress", ing)
+	}
+
 	if err := (&controllers.IngressReconciler{
 		Client:               mgr.GetClient(),
 		Log:                  ctrl.Log.WithName("controllers").WithName("ingress"),
@@ -155,6 +165,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 		Recorder:             mgr.GetEventRecorderFor("ingress-controller"),
 		Namespace:            opts.namespace,
 		AnnotationsExtractor: annotations.NewAnnotationsExtractor(),
+		Driver:               driver,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create ingress controller: %w", err)
 	}
@@ -233,4 +244,18 @@ func runController(ctx context.Context, opts managerOpts) error {
 	}
 
 	return nil
+}
+
+func getDriver(mgr manager.Manager) (*store.Driver, error) {
+	ingresses := &netv1.IngressList{}
+	if err := mgr.GetAPIReader().List(context.Background(), ingresses); err != nil {
+		return nil, err
+	}
+	cacheStores := store.NewCacheStores()
+	for _, ing := range ingresses.Items {
+		cacheStores.Add(&ing)
+	}
+	// TODO: Don't hardcode ingress class name
+	s := store.New(cacheStores, "ngrok", false, true)
+	return store.NewDriver(s), nil
 }
