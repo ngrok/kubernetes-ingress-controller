@@ -153,7 +153,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 		return fmt.Errorf("unable to create Driver: %w", err)
 	}
 
-	ings := driver.Store.ListIngressesV1()
+	ings := driver.Store.ListNgrokIngressesV1()
 	for _, ing := range ings {
 		setupLog.Info("found ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
 	}
@@ -251,10 +251,21 @@ func getDriver(mgr manager.Manager) (*store.Driver, error) {
 	if err := mgr.GetAPIReader().List(context.Background(), ingresses); err != nil {
 		return nil, err
 	}
+
+	ingressClasses := &netv1.IngressClassList{}
+	if err := mgr.GetAPIReader().List(context.Background(), ingressClasses); err != nil {
+		return nil, err
+	}
+
 	logger := mgr.GetLogger().WithName("cache-store")
 	d := store.NewDriver(logger)
 	for _, ing := range ingresses.Items {
 		d.Add(&ing)
 	}
+
+	for _, ingClass := range ingressClasses.Items {
+		d.Add(&ingClass)
+	}
+
 	return d, nil
 }

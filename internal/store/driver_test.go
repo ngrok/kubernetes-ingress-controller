@@ -22,19 +22,26 @@ func TestDriver(t *testing.T) {
 
 	d := NewDriver(logger)
 
-	i1 := NewTestIngressV1("test1", "test")
-	i2 := NewTestIngressV1("test2", "test")
-	i3 := NewTestIngressV1("test4", "other")
-	d.Add(i1)
-	d.Add(i2)
-	d.Add(i3)
-	ings := d.Store.ListIngressesV1()
-	if len(ings) != 3 {
-		t.Errorf("expected 3 ingresses, got %d", len(ings))
+	names := []string{"test1", "test2", "test3"}
+	namespaces := []string{"test", "other"}
+
+	ings := []netv1.Ingress{}
+	for _, name := range names {
+		for _, namespace := range namespaces {
+			ing := NewTestIngressV1(name, namespace)
+			ings = append(ings, ing)
+		}
+	}
+	for _, ing := range ings {
+		err := d.Add(&ing)
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
 	}
 
-	for _, ing := range ings {
-		fmt.Printf("Found ing: %v \n", ing)
+	foundIngs := d.Store.ListIngressesV1()
+	if len(foundIngs) != 6 {
+		t.Errorf("expected 6 ingresses, got %d", len(foundIngs))
 	}
 
 	i1CP, err := d.Store.GetIngressV1("test1", "test")
@@ -64,8 +71,146 @@ func TestDriver(t *testing.T) {
 	}
 }
 
-func NewTestIngressV1(name string, namespace string) *netv1.Ingress {
-	return &netv1.Ingress{
+func TestIngressClass(t *testing.T) {
+	logger := logr.New(logr.Discard().GetSink())
+	iMatching := NewTestIngressV1WithClass("test1", "test", "ngrok")
+	iNotMatching := NewTestIngressV1WithClass("test2", "test", "test")
+	iNoClass := NewTestIngressV1("test3", "test")
+	icUsDefault := NewTestIngressClass("ngrok", true, true)
+	icUsNotDefault := NewTestIngressClass("ngrok", false, true)
+	icOtherDefault := NewTestIngressClass("test", true, false)
+	icOtherNotDefault := NewTestIngressClass("test", false, false)
+
+	// Ingress Class Scenarios
+	// No classes
+	// just us not as default
+	// just us as default
+	// just another not as default
+	// just another as default
+	// us and another neither default
+	// us and another them default
+	// us and another us default
+	// us and another both default ?
+
+	scenarios := []struct {
+		name              string
+		ingressClasses    []netv1.IngressClass
+		ingresses         []netv1.Ingress
+		expectedIngresses int
+	}{
+		{
+			name:              "no ingress classes",
+			ingressClasses:    []netv1.IngressClass{},
+			expectedIngresses: 0,
+		},
+		{
+			name:              "just us not as default",
+			ingressClasses:    []netv1.IngressClass{icUsNotDefault},
+			expectedIngresses: 1,
+		},
+		{
+			name:              "just us as default",
+			ingressClasses:    []netv1.IngressClass{icUsDefault},
+			expectedIngresses: 2,
+		},
+		{
+			name:              "just another not as default",
+			ingressClasses:    []netv1.IngressClass{icOtherNotDefault},
+			expectedIngresses: 0,
+		},
+		{
+			name:              "just another as default",
+			ingressClasses:    []netv1.IngressClass{icOtherDefault},
+			expectedIngresses: 0,
+		},
+		{
+			name:              "us and another neither default",
+			ingressClasses:    []netv1.IngressClass{icUsNotDefault, icOtherNotDefault},
+			expectedIngresses: 1,
+		},
+		{
+			name:              "us and another them default",
+			ingressClasses:    []netv1.IngressClass{icUsNotDefault, icOtherDefault},
+			expectedIngresses: 1,
+		},
+		{
+			name:              "us and another us default",
+			ingressClasses:    []netv1.IngressClass{icUsDefault, icOtherNotDefault},
+			expectedIngresses: 2,
+		},
+		{
+			name:              "us and another both default",
+			ingressClasses:    []netv1.IngressClass{icUsDefault, icOtherDefault},
+			expectedIngresses: 2,
+		},
+	}
+
+	d := NewDriver(logger)
+	d.Add(&icUsNotDefault)
+	d.Add(&iMatching)
+	d.Add(&iNotMatching)
+	d.Add(&iNoClass)
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			var d = NewDriver(logger)
+			for _, ic := range scenario.ingressClasses {
+				err := d.Add(&ic)
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			}
+			d.Add(&iMatching)
+			d.Add(&iNotMatching)
+			d.Add(&iNoClass)
+
+			foundIngs := d.Store.ListNgrokIngressesV1()
+			if len(foundIngs) != scenario.expectedIngresses {
+				ings := d.Store.ListIngressesV1()
+				ngrokIngs := d.Store.ListNgrokIngressesV1()
+				ingClasses := d.Store.ListIngressClassesV1()
+				ngrokIngClasses := d.Store.ListNgrokIngressClassesV1()
+
+				t.Errorf("Found: ings: %+v \n ngrokIngs: %+v \n ingClasses: %+v \n ngrokIngClasses: %+v", ings, ngrokIngs, ingClasses, ngrokIngClasses)
+				// t.Errorf("expected %d ingresses, got %d \nThe store had these ingresses %+v\n", scenario.expectedIngresses, len(foundIngs), d.Store.ListIngressesV1())
+			}
+		})
+	}
+}
+
+func NewTestIngressClass(name string, isDefault bool, isNgrok bool) netv1.IngressClass {
+	i := netv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "controller",
+			},
+		},
+	}
+
+	if isNgrok {
+		i.Spec.Controller = controllerName
+	} else {
+		i.Spec.Controller = "kubernetes.io/ingress-other"
+	}
+
+	if isDefault {
+		i.Annotations = map[string]string{
+			"ingressclass.kubernetes.io/is-default-class": "true",
+		}
+	}
+
+	return i
+}
+
+func NewTestIngressV1WithClass(name string, namespace string, ingressClass string) netv1.Ingress {
+	i := NewTestIngressV1(name, namespace)
+	i.Spec.IngressClassName = &ingressClass
+	return i
+}
+
+func NewTestIngressV1(name string, namespace string) netv1.Ingress {
+	return netv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,

@@ -24,14 +24,13 @@ import (
 	"sync"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
-	"gopkg.in/yaml.v2"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func keyFunc(obj interface{}) (string, error) {
@@ -41,32 +40,20 @@ func keyFunc(obj interface{}) (string, error) {
 	return namespace.String() + "/" + name.String(), nil
 }
 
-// ErrNotFound error is returned when a lookup results in no resource.
-// This type is meant to be used for error handling using `errors.As()`.
-type ErrNotFound struct {
-	message string
-}
-
-// TODO: Make a more generically useable errors pkg for the project and move this there
-// Also add a helper IsNotFound check
-func (e ErrNotFound) Error() string {
-	if e.message == "" {
-		return "not found"
-	}
-	return e.message
-}
-
 // Storer is the interface that wraps the required methods to gather information
 // about ingresses, services, secrets and ingress annotations.
 type Storer interface {
 	GetIngressClassV1(name string) (*netv1.IngressClass, error)
 
 	ListIngressClassesV1() []*netv1.IngressClass
+	ListNgrokIngressClassesV1() []*netv1.IngressClass
 	ListIngressesV1() []*netv1.Ingress
+	ListNgrokIngressesV1() []*netv1.Ingress
 	ListDomainsV1() []*ingressv1alpha1.Domain
 	ListTunnelsV1() []*ingressv1alpha1.Tunnel
 
 	GetIngressV1(name, namespace string) (*netv1.Ingress, error)
+	GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error)
 }
 
 // Store implements Storer and can be used to list Ingress, Services
@@ -74,9 +61,9 @@ type Storer interface {
 // be synced and updated by the caller.
 // It is ingressClass filter aware.
 type Store struct {
-	stores       CacheStores
-	ingressClass string
-	log          logr.Logger
+	stores         CacheStores
+	controllerName string
+	log            logr.Logger
 }
 
 var _ Storer = Store{}
@@ -108,70 +95,12 @@ func NewCacheStores(logger logr.Logger) CacheStores {
 	}
 }
 
-// // NewCacheStoresFromObjYAML provides a new CacheStores object given any number of byte arrays containing
-// // YAML Kubernetes objects. An error is returned if any provided YAML was not a valid Kubernetes object.
-// func NewCacheStoresFromObjYAML(objs ...[]byte) (c CacheStores, err error) {
-// 	kobjs := make([]runtime.Object, 0, len(objs))
-// 	sr := serializer.NewYAMLSerializer(
-// 		yamlserializer.DefaultMetaFactory,
-// 		unstructuredscheme.NewUnstructuredCreator(),
-// 		unstructuredscheme.NewUnstructuredObjectTyper(),
-// 	)
-// 	for _, yaml := range objs {
-// 		kobj, _, decodeErr := sr.Decode(yaml, nil, nil)
-// 		if err = decodeErr; err != nil {
-// 			return
-// 		}
-// 		kobjs = append(kobjs, kobj)
-// 	}
-// 	return NewCacheStoresFromObjs(kobjs...)
-// }
-
-// // NewCacheStoresFromObjs provides a new CacheStores object given any number of Kubernetes
-// // objects that should be pre-populated. This function will sort objects into the appropriate
-// // sub-storage (e.g. IngressV1, TCPIngress, e.t.c.) but will produce an error if any of the
-// // input objects are erroneous or otherwise unusable as Kubernetes objects.
-// func NewCacheStoresFromObjs(objs ...runtime.Object) (CacheStores, error) {
-// 	c := NewCacheStores()
-// 	for _, obj := range objs {
-// 		typedObj, err := mkObjFromGVK(obj.GetObjectKind().GroupVersionKind())
-// 		if err != nil {
-// 			return c, err
-// 		}
-
-// 		if err := convUnstructuredObj(obj, typedObj); err != nil {
-// 			return c, err
-// 		}
-
-// 		if err := c.Add(typedObj); err != nil {
-// 			return c, err
-// 		}
-// 	}
-// 	return c, nil
-// }
-
 // New creates a new object store to be used in the ingress controller.
-func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 bool, processClasslessIngressV1 bool, logger logr.Logger) Storer {
-	// 	var ingressV1Beta1ClassMatching annotations.ClassMatching
-	// 	var ingressV1ClassMatching annotations.ClassMatching
-	// 	if processClasslessIngressV1Beta1 {
-	// 		ingressV1Beta1ClassMatching = annotations.ExactOrEmptyClassMatch
-	// 	} else {
-	// 		ingressV1Beta1ClassMatching = annotations.ExactClassMatch
-	// 	}
-	// 	if processClasslessIngressV1 {
-	// 		ingressV1ClassMatching = annotations.ExactOrEmptyClassMatch
-	// 	} else {
-	// 		ingressV1ClassMatching = annotations.ExactClassMatch
-	// 	}
+func New(cs CacheStores, controllerName string, logger logr.Logger) Storer {
 	return Store{
-		stores: cs,
-		// 		ingressClass:                ingressClass,
-		// 		ingressV1Beta1ClassMatching: ingressV1Beta1ClassMatching,
-		// 		ingressV1ClassMatching:      ingressV1ClassMatching,
-		// 		isValidIngressClass:         annotations.IngressClassValidatorFuncFromObjectMeta(ingressClass),
-		// 		isValidIngressV1Class:       annotations.IngressClassValidatorFuncFromV1Ingress(ingressClass),
-		log: logger,
+		stores:         cs,
+		controllerName: controllerName,
+		log:            logger,
 	}
 }
 
@@ -262,7 +191,7 @@ func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 		return nil, err
 	}
 	if !exists {
-		return nil, ErrNotFound{fmt.Sprintf("IngressClass %v not found", name)}
+		return nil, errors.NewErrorNotFound(fmt.Sprintf("IngressClass %v not found", name))
 	}
 	return p.(*netv1.IngressClass), nil
 }
@@ -274,9 +203,23 @@ func (s Store) GetIngressV1(name, namespcae string) (*netv1.Ingress, error) {
 		return nil, err
 	}
 	if !exists {
-		return nil, ErrNotFound{fmt.Sprintf("Ingress %v not found", name)}
+		return nil, errors.NewErrorNotFound(fmt.Sprintf("Ingress %v not found", name))
 	}
 	return p.(*netv1.Ingress), nil
+}
+
+func (s Store) GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error) {
+	ing, err := s.GetIngressV1(name, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if !s.shouldHandleIngress(ing) {
+		ngrokClasses := s.ListNgrokClassNames()
+
+		return nil, errors.NewErrDifferentIngressClass(ngrokClasses, *ing.Spec.IngressClassName)
+	}
+
+	return ing, nil
 }
 
 // ListIngressClassesV1 returns the list of Ingresses in the Ingress v1 store.
@@ -286,10 +229,7 @@ func (s Store) ListIngressClassesV1() []*netv1.IngressClass {
 	for _, item := range s.stores.IngressClassV1.List() {
 		class, ok := item.(*netv1.IngressClass)
 		if !ok {
-			// s.logger.Warnf("listIngressClassesV1: dropping object of unexpected type: %#v", item)
-			continue
-		}
-		if class.Spec.Controller != "k8s.ngrok.com/ingress-controller" {
+			s.log.Info("listIngressClassesV1: dropping object of unexpected type: %#v", item)
 			continue
 		}
 		classes = append(classes, class)
@@ -302,42 +242,42 @@ func (s Store) ListIngressClassesV1() []*netv1.IngressClass {
 	return classes
 }
 
+// ListNgrokIngressClassesV1 returns the list of Ingresses in the Ingress v1 store filtered
+// by ones that match the controllerName
+func (s Store) ListNgrokIngressClassesV1() []*netv1.IngressClass {
+	filteredClasses := []*netv1.IngressClass{}
+	classes := s.ListIngressClassesV1()
+	for _, class := range classes {
+		if class.Spec.Controller == s.controllerName {
+			filteredClasses = append(filteredClasses, class)
+		}
+	}
+
+	return filteredClasses
+}
+
+// ListNgrokClassNames returns a string slice of the names of each matching ingress class
+func (s Store) ListNgrokClassNames() []string {
+	classes := s.ListNgrokIngressClassesV1()
+	names := []string{}
+	for _, class := range classes {
+		names = append(names, class.Name)
+	}
+	return names
+}
+
 // ListIngressesV1 returns the list of Ingresses in the Ingress v1 store.
 func (s Store) ListIngressesV1() []*netv1.Ingress {
 	// filter ingress rules
 	var ingresses []*netv1.Ingress
 
-	// keys := s.stores.IngressV1.ListKeys()
-	ings := s.stores.IngressV1.List()
-	// s.log.Info("In the ListingressV1, and found these ingresses from store list: ", "ingresses", ings, "keys", keys)
-
-	// s.log.Info("In the ListingressV1, and found these ingresses from store list: ", "ings", ings)
-	for _, item := range ings {
+	for _, item := range s.stores.IngressV1.List() {
 		ing, ok := item.(*netv1.Ingress)
 		if !ok {
 			e := fmt.Sprintf("listIngressesV1: dropping object of unexpected type: %#v", item)
 			s.log.Error(fmt.Errorf(e), e)
 			continue
 		}
-		// if ing.ObjectMeta.GetAnnotations()[annotations.IngressClassKey] != "" {
-		// 	if !s.isValidIngressClass(&ing.ObjectMeta, annotations.IngressClassKey, s.ingressV1ClassMatching) {
-		// 		continue
-		// 	}
-		// } else if ing.Spec.IngressClassName != nil {
-		// 	if !s.isValidIngressV1Class(ing, s.ingressV1ClassMatching) {
-		// 		continue
-		// 	}
-		// } else {
-		// 	class, err := s.GetIngressClassV1(s.ingressClass)
-		// 	if err != nil {
-		// 		s.logger.Debugf("IngressClass %s not found", s.ingressClass)
-		// 		continue
-		// 	}
-		// 	if !ctrlutils.IsDefaultIngressClass(class) {
-		// 		continue
-		// 	}
-		// }
-		// s.log.Info("In the ListingressV1, and adding this ingress: ", "ing", ing)
 		ingresses = append(ingresses, ing)
 	}
 
@@ -349,6 +289,36 @@ func (s Store) ListIngressesV1() []*netv1.Ingress {
 	return ingresses
 }
 
+func (s Store) ListNgrokIngressesV1() []*netv1.Ingress {
+	ings := s.ListIngressesV1()
+
+	var ingresses []*netv1.Ingress
+	for _, ing := range ings {
+		if s.shouldHandleIngress(ing) {
+			ingresses = append(ingresses, ing)
+		}
+	}
+	return ingresses
+}
+
+func (s Store) shouldHandleIngress(ing *netv1.Ingress) bool {
+	ngrokClasses := s.ListNgrokIngressClassesV1()
+	if ing.Spec.IngressClassName != nil {
+		for _, class := range ngrokClasses {
+			if *ing.Spec.IngressClassName == class.Name {
+				return true
+			}
+		}
+	} else {
+		for _, class := range ngrokClasses {
+			if class.ObjectMeta.Annotations["ingressclass.kubernetes.io/is-default-class"] == "true" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ListDomainsV1 returns the list of Domains in the Domain v1 store.
 func (s Store) ListDomainsV1() []*ingressv1alpha1.Domain {
 	// filter ingress rules
@@ -356,7 +326,7 @@ func (s Store) ListDomainsV1() []*ingressv1alpha1.Domain {
 	for _, item := range s.stores.DomainV1.List() {
 		domain, ok := item.(*ingressv1alpha1.Domain)
 		if !ok {
-			// s.logger.Warnf("listDomainsV1: dropping object of unexpected type: %#v", item)
+			s.log.Info("listDomainsV1: dropping object of unexpected type: %#v", item)
 			continue
 		}
 		domains = append(domains, domain)
@@ -376,7 +346,7 @@ func (s Store) ListTunnelsV1() []*ingressv1alpha1.Tunnel {
 	for _, item := range s.stores.TunnelV1.List() {
 		tunnel, ok := item.(*ingressv1alpha1.Tunnel)
 		if !ok {
-			// s.logger.Warnf("listTunnelsV1: dropping object of unexpected type: %#v", item)
+			s.log.Info("listTunnelsV1: dropping object of unexpected type: %#v", item)
 			continue
 		}
 		tunnels = append(tunnels, tunnel)
@@ -388,39 +358,4 @@ func (s Store) ListTunnelsV1() []*ingressv1alpha1.Tunnel {
 	})
 
 	return tunnels
-}
-
-// convUnstructuredObj is a convenience function to quickly convert any runtime.Object where the underlying type
-// is an *unstructured.Unstructured (client-go's dynamic client type) and convert that object to a runtime.Object
-// which is backed by the API type it represents. You can use the GVK of the runtime.Object to determine what type
-// you want to convert to. This function is meant so that storer implementations can optionally work with YAML files
-// for caller convenience when initializing new CacheStores objects.
-//
-// TODO: upon some searching I didn't find an analog to this over in client-go (https://github.com/kubernetes/client-go)
-// however I could have just missed it. We should switch if we find something better, OR we should contribute
-// this functionality upstream.
-func convUnstructuredObj(from, to runtime.Object) error {
-	b, err := yaml.Marshal(from)
-	if err != nil {
-		return fmt.Errorf("failed to convert object %s to yaml: %w", from.GetObjectKind().GroupVersionKind(), err)
-	}
-	return yaml.Unmarshal(b, to)
-}
-
-// mkObjFromGVK is a factory function that returns a concrete implementation runtime.Object
-// for the given GVK. Callers can then use `convert()` to convert an unstructured
-// runtime.Object into a concrete one.
-func mkObjFromGVK(gvk schema.GroupVersionKind) (runtime.Object, error) {
-	switch gvk {
-	case netv1.SchemeGroupVersion.WithKind("Ingress"):
-		return &netv1.Ingress{}, nil
-	case netv1.SchemeGroupVersion.WithKind("IngressClass"):
-		return &netv1.IngressClass{}, nil
-	case ingressv1alpha1.GroupVersion.WithKind("Domain"):
-		return &ingressv1alpha1.Domain{}, nil
-	case ingressv1alpha1.GroupVersion.WithKind("Tunnel"):
-		return &ingressv1alpha1.Tunnel{}, nil
-	default:
-		return nil, fmt.Errorf("unknown GVK: %v", gvk)
-	}
 }

@@ -72,7 +72,7 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := irec.Log.WithValues("ingress", req.NamespacedName)
 	ctx = ctrl.LoggerInto(ctx, log)
-	ingress, err := justGetIngress(ctx, irec.Client, req.NamespacedName)
+	ingress, err := getIngress(ctx, irec.Client, req.NamespacedName)
 
 	// If the ingress doesn't exist, delete it from the store and be done
 	// TODO: This should never trigger because of our predicate filter
@@ -103,7 +103,11 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	ingress, err = irec.Driver.Store.GetIngressV1(ingress.Name, ingress.Namespace)
+	ingress, err = irec.Driver.Store.GetNgrokIngressV1(ingress.Name, ingress.Namespace)
+	if internalerrors.IsErrDifferentIngressClass(err) {
+		log.Info("Ingress is not of type ngrok so skipping it")
+		return ctrl.Result{}, nil
+	}
 	if err != nil {
 		log.Error(err, "Failed to get ingress from store")
 		return ctrl.Result{}, err

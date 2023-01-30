@@ -9,6 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// The name of the ingress controller which is uses to match on ingress classes
+const controllerName = "k8s.ngrok.com/ingress-controller" // TODO: Let the user configure this
+
 type Driver struct {
 	Store       Storer
 	cacheStores CacheStores
@@ -18,7 +21,7 @@ type Driver struct {
 
 func NewDriver(logger logr.Logger) *Driver {
 	cacheStores := NewCacheStores(logger)
-	s := New(cacheStores, "ngrok", false, true, logger)
+	s := New(cacheStores, controllerName, logger)
 	return &Driver{
 		Store:       s,
 		cacheStores: cacheStores,
