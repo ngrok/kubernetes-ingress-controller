@@ -33,7 +33,7 @@ func TestDriver(t *testing.T) {
 		}
 	}
 	for _, ing := range ings {
-		err := d.Add(&ing)
+		err := d.Update(&ing)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -146,23 +146,23 @@ func TestIngressClass(t *testing.T) {
 	}
 
 	d := NewDriver(logger)
-	d.Add(&icUsNotDefault)
-	d.Add(&iMatching)
-	d.Add(&iNotMatching)
-	d.Add(&iNoClass)
+	d.Update(&icUsNotDefault)
+	d.Update(&iMatching)
+	d.Update(&iNotMatching)
+	d.Update(&iNoClass)
 
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			var d = NewDriver(logger)
 			for _, ic := range scenario.ingressClasses {
-				err := d.Add(&ic)
+				err := d.Update(&ic)
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
 			}
-			d.Add(&iMatching)
-			d.Add(&iNotMatching)
-			d.Add(&iNoClass)
+			d.Update(&iMatching)
+			d.Update(&iNotMatching)
+			d.Update(&iNoClass)
 
 			foundIngs := d.Store.ListNgrokIngressesV1()
 			if len(foundIngs) != scenario.expectedIngresses {

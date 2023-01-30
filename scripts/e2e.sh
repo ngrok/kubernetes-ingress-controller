@@ -24,13 +24,17 @@ do
   echo "kubectl get ingress -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -"
   kubectl get ingress -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -
 done
-# # Remove finalizers from domains in namespace
-# kubectl get domains -A -o custom-columns=NAMESPACE:metadata.namespace,NAME:metadata.name --no-headers | \
-# while read -r i
-# do
-#   echo "kubectl get domains -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -"
-#   kubectl get domains -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -
-# done
+# Remove finalizers from domains in namespace if the api exists
+kubectl get domains
+if [ $? -eq 0 ]
+then
+  kubectl get domains -A -o custom-columns=NAMESPACE:metadata.namespace,NAME:metadata.name --no-headers | \
+  while read -r i
+  do
+    echo "kubectl get domains -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -"
+    kubectl get domains -n $i -o=json | jq '.metadata.finalizers = null' | kubectl apply -f -
+  done
+fi
 
 kubectl delete namespace $namespace --ignore-not-found
 

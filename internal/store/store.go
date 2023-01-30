@@ -184,7 +184,6 @@ func (c CacheStores) Delete(obj runtime.Object) error {
 }
 
 // GetIngressClassV1 returns the 'name' IngressClass resource.
-// TODO: Should validate the ingress object the same way the func validateIngress in main does
 func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 	p, exists, err := s.stores.IngressClassV1.GetByKey(name)
 	if err != nil {
@@ -302,6 +301,11 @@ func (s Store) ListNgrokIngressesV1() []*netv1.Ingress {
 }
 
 func (s Store) shouldHandleIngress(ing *netv1.Ingress) bool {
+	return s.shouldHandleIngressCheckClass(ing) && s.shouldHandleIngressIsValid(ing)
+}
+
+// shouldHandleIngressCheckClass checks if the ingress should be handled by the controller based on the ingress class
+func (s Store) shouldHandleIngressCheckClass(ing *netv1.Ingress) bool {
 	ngrokClasses := s.ListNgrokIngressClassesV1()
 	if ing.Spec.IngressClassName != nil {
 		for _, class := range ngrokClasses {
@@ -317,6 +321,30 @@ func (s Store) shouldHandleIngress(ing *netv1.Ingress) bool {
 		}
 	}
 	return false
+}
+
+// shouldHandleIngressIsValid checks if the ingress should be handled by the controller based on the ingress spec
+func (s Store) shouldHandleIngressIsValid(ing *netv1.Ingress) bool {
+	var err error
+	if len(ing.Spec.Rules) > 1 {
+		err = fmt.Errorf("A maximum of one rule is required to be set")
+	}
+	if len(ing.Spec.Rules) == 0 {
+		err = fmt.Errorf("At least one rule is required to be set")
+	}
+	if ing.Spec.Rules[0].Host == "" {
+		err = fmt.Errorf("A host is required to be set")
+	}
+	for _, path := range ing.Spec.Rules[0].HTTP.Paths {
+		if path.Backend.Resource != nil {
+			err = fmt.Errorf("Resource backends are not supported")
+		}
+	}
+	if err != nil {
+		s.log.Error(err, "Ingress is invalid")
+		return false
+	}
+	return true
 }
 
 // ListDomainsV1 returns the list of Domains in the Domain v1 store.

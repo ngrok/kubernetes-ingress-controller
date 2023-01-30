@@ -47,7 +47,6 @@ import (
 	"github.com/ngrok/kubernetes-ingress-controller/internal/ngrokapi"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
 	"github.com/ngrok/kubernetes-ingress-controller/pkg/tunneldriver"
-	netv1 "k8s.io/api/networking/v1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -148,14 +147,9 @@ func runController(ctx context.Context, opts managerOpts) error {
 		return fmt.Errorf("unable to start manager: %w", err)
 	}
 
-	driver, err := getDriver(mgr)
+	driver, err := getDriver(ctx, mgr)
 	if err != nil {
 		return fmt.Errorf("unable to create Driver: %w", err)
-	}
-
-	ings := driver.Store.ListNgrokIngressesV1()
-	for _, ing := range ings {
-		setupLog.Info("found ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
 	}
 
 	if err := (&controllers.IngressReconciler{
@@ -246,25 +240,32 @@ func runController(ctx context.Context, opts managerOpts) error {
 	return nil
 }
 
-func getDriver(mgr manager.Manager) (*store.Driver, error) {
-	ingresses := &netv1.IngressList{}
-	if err := mgr.GetAPIReader().List(context.Background(), ingresses); err != nil {
-		return nil, err
-	}
-
-	ingressClasses := &netv1.IngressClassList{}
-	if err := mgr.GetAPIReader().List(context.Background(), ingressClasses); err != nil {
-		return nil, err
-	}
-
-	logger := mgr.GetLogger().WithName("cache-store")
+// getDriver returns a new Driver instance that is seeded with the current state of the cluster.
+func getDriver(ctx context.Context, mgr manager.Manager) (*store.Driver, error) {
+	logger := mgr.GetLogger().WithName("cache-store-driver")
 	d := store.NewDriver(logger)
-	for _, ing := range ingresses.Items {
-		d.Add(&ing)
+	if err := d.Seed(ctx, mgr.GetAPIReader()); err != nil {
+		return nil, fmt.Errorf("unable to seed cache store: %w", err)
 	}
 
-	for _, ingClass := range ingressClasses.Items {
-		d.Add(&ingClass)
+	ings := d.Store.ListNgrokIngressesV1()
+	for _, ing := range ings {
+		// TODO:(initial-store) These may be overkill or could be moved to debug level.
+		setupLog.Info("found matching ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
+	}
+
+	// Helpful debug information if someone doesn't have their ingress class set up correctly.
+	if len(ings) == 0 {
+		ingresses := d.Store.ListIngressesV1()
+		ngrokIngresses := d.Store.ListNgrokIngressesV1()
+		ingressClasses := d.Store.ListIngressClassesV1()
+		ngrokIngressClasses := d.Store.ListNgrokIngressClassesV1()
+		setupLog.Info("no matching ingresses found",
+			"all ingresses", ingresses,
+			"all ngrok ingresses", ngrokIngresses,
+			"all ingress classes", ingressClasses,
+			"all ngrok ingress classes", ngrokIngressClasses,
+		)
 	}
 
 	return d, nil

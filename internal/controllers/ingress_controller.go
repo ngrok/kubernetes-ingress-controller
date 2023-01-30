@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,11 +73,12 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := irec.Log.WithValues("ingress", req.NamespacedName)
 	ctx = ctrl.LoggerInto(ctx, log)
-	ingress, err := getIngress(ctx, irec.Client, req.NamespacedName)
-
+	ingress := &netv1.Ingress{}
+	err := irec.Client.Get(ctx, req.NamespacedName, ingress)
 	// If the ingress doesn't exist, delete it from the store and be done
-	// TODO: This should never trigger because of our predicate filter
 	if client.IgnoreNotFound(err) != nil {
+		// TODO:(initial-store) remove this once i verify it works this way
+		log.Error(err, "In the reconcile loop, failed to get ingress which must mean a delete event occurred somehow even though we filter")
 		err := irec.Driver.DeleteIngress(req.NamespacedName)
 		if err != nil {
 			log.Error(err, "Failed to delete ingress from store")
@@ -90,14 +92,8 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	// TODO: Validation should be done in the store and filtered at the add/get operations
-	// if err := validateIngress(ctx, ingress); err != nil {
-	// 	irec.Recorder.Event(ingress, v1.EventTypeWarning, "Invalid ingress, discarding the event.", err.Error())
-	// 	return ctrl.Result{}, nil
-	// }
-
 	// add the ingress object to the store
-	err = irec.Driver.Add(ingress)
+	err = irec.Driver.Update(ingress)
 	if err != nil {
 		log.Error(err, "Failed to add ingress to store")
 		return ctrl.Result{}, err
@@ -147,7 +143,7 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Otherwise, update everything
-	err = irec.Driver.Add(ingress)
+	err = irec.Driver.Update(ingress)
 	if err != nil {
 		log.Error(err, "Failed to add ingress to store")
 		return ctrl.Result{}, err
@@ -475,4 +471,13 @@ func ingressToTunnels(ingress *netv1.Ingress) []ingressv1alpha1.Tunnel {
 	}
 
 	return tunnels
+}
+
+// Generates a labels map for matching ngrok Routes to Agent Tunnels
+func backendToLabelMap(backend netv1.IngressBackend, namespace string) map[string]string {
+	return map[string]string{
+		"k8s.ngrok.com/namespace": namespace,
+		"k8s.ngrok.com/service":   backend.Service.Name,
+		"k8s.ngrok.com/port":      strconv.Itoa(int(backend.Service.Port.Number)),
+	}
 }
