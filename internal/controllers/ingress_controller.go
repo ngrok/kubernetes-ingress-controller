@@ -96,6 +96,20 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// 	return ctrl.Result{}, nil
 	// }
 
+	// add the ingress object to the store
+	err = irec.Driver.Add(ingress)
+	if err != nil {
+		log.Error(err, "Failed to add ingress to store")
+		return ctrl.Result{}, err
+	}
+
+	ingress, err = irec.Driver.Store.GetIngressV1(ingress.Name, ingress.Namespace)
+	if err != nil {
+		log.Error(err, "Failed to get ingress from store")
+		return ctrl.Result{}, err
+	}
+	log.Info("Got ingress from store", "ingress", ingress)
+
 	if ingress.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The object is not being deleted, so register and sync finalizer
 		if err := registerAndSyncFinalizer(ctx, irec.Client, ingress); err != nil {

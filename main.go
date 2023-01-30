@@ -155,7 +155,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 
 	ings := driver.Store.ListIngressesV1()
 	for _, ing := range ings {
-		setupLog.Info("found ingress", "ingress", ing)
+		setupLog.Info("found ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
 	}
 
 	if err := (&controllers.IngressReconciler{
@@ -251,11 +251,10 @@ func getDriver(mgr manager.Manager) (*store.Driver, error) {
 	if err := mgr.GetAPIReader().List(context.Background(), ingresses); err != nil {
 		return nil, err
 	}
-	cacheStores := store.NewCacheStores()
+	logger := mgr.GetLogger().WithName("cache-store")
+	d := store.NewDriver(logger)
 	for _, ing := range ingresses.Items {
-		cacheStores.Add(&ing)
+		d.Add(&ing)
 	}
-	// TODO: Don't hardcode ingress class name
-	s := store.New(cacheStores, "ngrok", false, true)
-	return store.NewDriver(s), nil
+	return d, nil
 }

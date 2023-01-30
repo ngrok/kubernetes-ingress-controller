@@ -18,6 +18,7 @@ package store
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -26,14 +27,19 @@ import (
 	"gopkg.in/yaml.v2"
 
 	netv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured/unstructuredscheme"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	serializer "k8s.io/apimachinery/pkg/runtime/serializer/json"
-	yamlserializer "k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 )
+
+func keyFunc(obj interface{}) (string, error) {
+	v := reflect.Indirect(reflect.ValueOf(obj))
+	name := v.FieldByName("Name")
+	namespace := v.FieldByName("Namespace")
+	return namespace.String() + "/" + name.String(), nil
+}
 
 // ErrNotFound error is returned when a lookup results in no resource.
 // This type is meant to be used for error handling using `errors.As()`.
@@ -59,6 +65,8 @@ type Storer interface {
 	ListIngressesV1() []*netv1.Ingress
 	ListDomainsV1() []*ingressv1alpha1.Domain
 	ListTunnelsV1() []*ingressv1alpha1.Tunnel
+
+	GetIngressV1(name, namespace string) (*netv1.Ingress, error)
 }
 
 // Store implements Storer and can be used to list Ingress, Services
@@ -68,6 +76,7 @@ type Storer interface {
 type Store struct {
 	stores       CacheStores
 	ingressClass string
+	log          logr.Logger
 }
 
 var _ Storer = Store{}
@@ -83,70 +92,68 @@ type CacheStores struct {
 	DomainV1 cache.Store
 	TunnelV1 cache.Store
 
-	l *sync.RWMutex
+	log logr.Logger
+	l   *sync.RWMutex
 }
 
 // NewCacheStores is a convenience function for CacheStores to initialize all attributes with new cache stores.
-func NewCacheStores() CacheStores {
+func NewCacheStores(logger logr.Logger) CacheStores {
 	return CacheStores{
-		IngressV1:      cache.NewStore(cache.MetaNamespaceKeyFunc),
-		IngressClassV1: cache.NewStore(cache.MetaNamespaceKeyFunc),
-		DomainV1:       cache.NewStore(cache.MetaNamespaceKeyFunc),
-		TunnelV1:       cache.NewStore(cache.MetaNamespaceKeyFunc),
+		IngressV1:      cache.NewStore(keyFunc),
+		IngressClassV1: cache.NewStore(keyFunc),
+		DomainV1:       cache.NewStore(keyFunc),
+		TunnelV1:       cache.NewStore(keyFunc),
 		l:              &sync.RWMutex{},
+		log:            logger,
 	}
 }
 
-// NewCacheStoresFromObjYAML provides a new CacheStores object given any number of byte arrays containing
-// YAML Kubernetes objects. An error is returned if any provided YAML was not a valid Kubernetes object.
-func NewCacheStoresFromObjYAML(objs ...[]byte) (c CacheStores, err error) {
-	kobjs := make([]runtime.Object, 0, len(objs))
-	sr := serializer.NewYAMLSerializer(
-		yamlserializer.DefaultMetaFactory,
-		unstructuredscheme.NewUnstructuredCreator(),
-		unstructuredscheme.NewUnstructuredObjectTyper(),
-	)
-	for _, yaml := range objs {
-		kobj, _, decodeErr := sr.Decode(yaml, nil, nil)
-		if err = decodeErr; err != nil {
-			return
-		}
-		kobjs = append(kobjs, kobj)
-	}
-	return NewCacheStoresFromObjs(kobjs...)
-}
+// // NewCacheStoresFromObjYAML provides a new CacheStores object given any number of byte arrays containing
+// // YAML Kubernetes objects. An error is returned if any provided YAML was not a valid Kubernetes object.
+// func NewCacheStoresFromObjYAML(objs ...[]byte) (c CacheStores, err error) {
+// 	kobjs := make([]runtime.Object, 0, len(objs))
+// 	sr := serializer.NewYAMLSerializer(
+// 		yamlserializer.DefaultMetaFactory,
+// 		unstructuredscheme.NewUnstructuredCreator(),
+// 		unstructuredscheme.NewUnstructuredObjectTyper(),
+// 	)
+// 	for _, yaml := range objs {
+// 		kobj, _, decodeErr := sr.Decode(yaml, nil, nil)
+// 		if err = decodeErr; err != nil {
+// 			return
+// 		}
+// 		kobjs = append(kobjs, kobj)
+// 	}
+// 	return NewCacheStoresFromObjs(kobjs...)
+// }
 
-// NewCacheStoresFromObjs provides a new CacheStores object given any number of Kubernetes
-// objects that should be pre-populated. This function will sort objects into the appropriate
-// sub-storage (e.g. IngressV1, TCPIngress, e.t.c.) but will produce an error if any of the
-// input objects are erroneous or otherwise unusable as Kubernetes objects.
-func NewCacheStoresFromObjs(objs ...runtime.Object) (CacheStores, error) {
-	c := NewCacheStores()
-	for _, obj := range objs {
-		typedObj, err := mkObjFromGVK(obj.GetObjectKind().GroupVersionKind())
-		if err != nil {
-			return c, err
-		}
+// // NewCacheStoresFromObjs provides a new CacheStores object given any number of Kubernetes
+// // objects that should be pre-populated. This function will sort objects into the appropriate
+// // sub-storage (e.g. IngressV1, TCPIngress, e.t.c.) but will produce an error if any of the
+// // input objects are erroneous or otherwise unusable as Kubernetes objects.
+// func NewCacheStoresFromObjs(objs ...runtime.Object) (CacheStores, error) {
+// 	c := NewCacheStores()
+// 	for _, obj := range objs {
+// 		typedObj, err := mkObjFromGVK(obj.GetObjectKind().GroupVersionKind())
+// 		if err != nil {
+// 			return c, err
+// 		}
 
-		if err := convUnstructuredObj(obj, typedObj); err != nil {
-			return c, err
-		}
+// 		if err := convUnstructuredObj(obj, typedObj); err != nil {
+// 			return c, err
+// 		}
 
-		if err := c.Add(typedObj); err != nil {
-			return c, err
-		}
-	}
-	return c, nil
-}
+// 		if err := c.Add(typedObj); err != nil {
+// 			return c, err
+// 		}
+// 	}
+// 	return c, nil
+// }
 
 // New creates a new object store to be used in the ingress controller.
-func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 bool, processClasslessIngressV1 bool,
-
-// logger logrus.FieldLogger,
-) Storer {
+func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 bool, processClasslessIngressV1 bool, logger logr.Logger) Storer {
 	// 	var ingressV1Beta1ClassMatching annotations.ClassMatching
 	// 	var ingressV1ClassMatching annotations.ClassMatching
-	// 	var kongConsumerClassMatching annotations.ClassMatching
 	// 	if processClasslessIngressV1Beta1 {
 	// 		ingressV1Beta1ClassMatching = annotations.ExactOrEmptyClassMatch
 	// 	} else {
@@ -157,20 +164,14 @@ func New(cs CacheStores, ingressClass string, processClasslessIngressV1Beta1 boo
 	// 	} else {
 	// 		ingressV1ClassMatching = annotations.ExactClassMatch
 	// 	}
-	// 	if processClasslessKongConsumer {
-	// 		kongConsumerClassMatching = annotations.ExactOrEmptyClassMatch
-	// 	} else {
-	// 		kongConsumerClassMatching = annotations.ExactClassMatch
-	// 	}
 	return Store{
 		stores: cs,
 		// 		ingressClass:                ingressClass,
 		// 		ingressV1Beta1ClassMatching: ingressV1Beta1ClassMatching,
 		// 		ingressV1ClassMatching:      ingressV1ClassMatching,
-		// 		kongConsumerClassMatching:   kongConsumerClassMatching,
 		// 		isValidIngressClass:         annotations.IngressClassValidatorFuncFromObjectMeta(ingressClass),
 		// 		isValidIngressV1Class:       annotations.IngressClassValidatorFuncFromV1Ingress(ingressClass),
-		// 		logger:                      logger,
+		log: logger,
 	}
 }
 
@@ -212,6 +213,7 @@ func (c CacheStores) Add(obj runtime.Object) error {
 	// ----------------------------------------------------------------------------
 	case *netv1.Ingress:
 		return c.IngressV1.Add(obj)
+
 	case *netv1.IngressClass:
 		return c.IngressClassV1.Add(obj)
 		// ----------------------------------------------------------------------------
@@ -265,6 +267,18 @@ func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 	return p.(*netv1.IngressClass), nil
 }
 
+// GetIngressV1 returns the 'name' Ingress resource.
+func (s Store) GetIngressV1(name, namespcae string) (*netv1.Ingress, error) {
+	p, exists, err := s.stores.IngressV1.GetByKey(fmt.Sprintf("%v/%v", namespcae, name))
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound{fmt.Sprintf("Ingress %v not found", name)}
+	}
+	return p.(*netv1.Ingress), nil
+}
+
 // ListIngressClassesV1 returns the list of Ingresses in the Ingress v1 store.
 func (s Store) ListIngressClassesV1() []*netv1.IngressClass {
 	// filter ingress rules
@@ -292,10 +306,17 @@ func (s Store) ListIngressClassesV1() []*netv1.IngressClass {
 func (s Store) ListIngressesV1() []*netv1.Ingress {
 	// filter ingress rules
 	var ingresses []*netv1.Ingress
-	for _, item := range s.stores.IngressV1.List() {
+
+	// keys := s.stores.IngressV1.ListKeys()
+	ings := s.stores.IngressV1.List()
+	// s.log.Info("In the ListingressV1, and found these ingresses from store list: ", "ingresses", ings, "keys", keys)
+
+	// s.log.Info("In the ListingressV1, and found these ingresses from store list: ", "ings", ings)
+	for _, item := range ings {
 		ing, ok := item.(*netv1.Ingress)
 		if !ok {
-			// s.logger.Warnf("listIngressesV1: dropping object of unexpected type: %#v", item)
+			e := fmt.Sprintf("listIngressesV1: dropping object of unexpected type: %#v", item)
+			s.log.Error(fmt.Errorf(e), e)
 			continue
 		}
 		// if ing.ObjectMeta.GetAnnotations()[annotations.IngressClassKey] != "" {
@@ -316,6 +337,7 @@ func (s Store) ListIngressesV1() []*netv1.Ingress {
 		// 		continue
 		// 	}
 		// }
+		// s.log.Info("In the ListingressV1, and adding this ingress: ", "ing", ing)
 		ingresses = append(ingresses, ing)
 	}
 
