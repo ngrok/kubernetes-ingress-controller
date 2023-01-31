@@ -316,10 +316,15 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 		var ngrokRoutes []ingressv1alpha1.HTTPSEdgeRouteSpec
 		for _, ingress := range ingresses {
 			for _, rule := range ingress.Spec.Rules {
+				// If any rule for an ingress matches, then it applies to this ingress
 				if rule.Host == domain.Spec.Domain {
-					var matchType string
+					// If any of them have the tls termination annotation, then we should set it for the whole edge
 					parsedRouteModules := annotations.NewAnnotationsExtractor().Extract(ingress)
+					if parsedRouteModules != nil && parsedRouteModules.TLSTermination != nil {
+						edge.Spec.TLSTermination = parsedRouteModules.TLSTermination
+					}
 
+					var matchType string
 					for _, httpIngressPath := range rule.HTTP.Paths {
 						switch *httpIngressPath.PathType {
 						case netv1.PathTypePrefix:
