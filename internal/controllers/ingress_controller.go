@@ -66,7 +66,17 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// If its fully gone, delete it from the store
-			return ctrl.Result{}, irec.Driver.DeleteIngress(req.NamespacedName)
+			if err := irec.Driver.DeleteIngress(req.NamespacedName); err != nil {
+				log.Error(err, "Failed to delete ingress from store")
+				return ctrl.Result{}, err
+			}
+
+			err = irec.Driver.Sync(ctx, irec.Client)
+			if err != nil {
+				log.Error(err, "Failed to sync ingress to store")
+				return ctrl.Result{}, err
+			}
+
 		}
 		return ctrl.Result{}, err // Otherwise, its a real error
 	}
@@ -99,23 +109,13 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 	} else {
-		// The object is being deleted
 		if hasFinalizer(ingress) {
-			log.Info("Deleting ingress")
-
-			if err = irec.DeleteDependents(ctx, ingress); err != nil {
+			log.Info("Deleting ingress from store")
+			if err := irec.delete(ctx, ingress); err != nil {
+				log.Error(err, "Failed to delete ingress")
 				return ctrl.Result{}, err
 			}
-
-			if err := removeAndSyncFinalizer(ctx, irec.Client, ingress); err != nil {
-				log.Error(err, "Failed to remove finalizer")
-				return ctrl.Result{}, err
-			}
-
-			// Remove the ingress object from the store
-			return ctrl.Result{}, irec.Driver.DeleteIngress(req.NamespacedName)
 		}
-
 		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
 	}
@@ -123,11 +123,14 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return irec.reconcileAll(ctx, ingress)
 }
 
-func (irec *IngressReconciler) DeleteDependents(ctx context.Context, ingress *netv1.Ingress) error {
-	// TODO:(initial-store) Currently this controller "owns" the HTTPSEdge and Tunnel objects so deleting an ingress
-	// will delete the HTTPSEdge and Tunnel objects. Once multiple ingress objects combine to form 1 edge
-	// this logic will need to be smarter
-	return nil
+// Delete is called when the ingress object is being deleted
+func (irec *IngressReconciler) delete(ctx context.Context, ingress *netv1.Ingress) error {
+	if err := removeAndSyncFinalizer(ctx, irec.Client, ingress); err != nil {
+		irec.Log.Error(err, "Failed to remove finalizer")
+		return err
+	}
+	// Remove the ingress object from the store
+	return irec.Driver.Delete(ingress)
 }
 
 func (irec *IngressReconciler) reconcileAll(ctx context.Context, ingress *netv1.Ingress) (reconcile.Result, error) {
