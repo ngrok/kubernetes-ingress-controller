@@ -5,7 +5,6 @@ import (
 
 	"github.com/go-logr/logr"
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
-	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	internalerrors "github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
 	netv1 "k8s.io/api/networking/v1"
@@ -21,12 +20,11 @@ import (
 // https://pkg.go.dev/sigs.k8s.io/controller-runtime#section-readme
 type IngressReconciler struct {
 	client.Client
-	Log                  logr.Logger
-	Scheme               *runtime.Scheme
-	Recorder             record.EventRecorder
-	Namespace            string
-	AnnotationsExtractor annotations.Extractor
-	Driver               *store.Driver
+	Log       logr.Logger
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+	Namespace string
+	Driver    *store.Driver
 }
 
 // Create a new controller using our reconciler and set it up with the manager

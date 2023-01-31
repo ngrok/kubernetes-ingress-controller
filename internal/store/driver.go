@@ -190,23 +190,27 @@ func (e *EnqueueOwnersAfterSyncing) Generic(evt event.GenericEvent, q workqueue.
 	e.ownerHandler.Generic(evt, q)
 }
 
+// TODO:(initial-store): This thing needs to be dried up somehow
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	d.log.Info("syncing driver state!!")
 	desiredDomains := d.calculateDomains()
 	desiredEdges := d.calculateHTTPSEdges()
 	desiredTunnels := d.calculateTunnels()
 
-	var currDomains *ingressv1alpha1.DomainList
-	var currEdges *ingressv1alpha1.HTTPSEdgeList
-	var currTunnels *ingressv1alpha1.TunnelList
+	currDomains := &ingressv1alpha1.DomainList{}
+	currEdges := &ingressv1alpha1.HTTPSEdgeList{}
+	currTunnels := &ingressv1alpha1.TunnelList{}
 
 	if err := c.List(ctx, currDomains); err != nil {
+		d.log.Error(err, "error listing domains")
 		return err
 	}
 	if err := c.List(ctx, currEdges); err != nil {
+		d.log.Error(err, "error listing edges")
 		return err
 	}
 	if err := c.List(ctx, currTunnels); err != nil {
+		d.log.Error(err, "error listing tunnels")
 		return err
 	}
 
@@ -216,7 +220,9 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			if desiredDomain.Name == currDomain.Name {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
-					if err := c.Update(ctx, &desiredDomain); err != nil {
+					currDomain.Spec = desiredDomain.Spec
+					if err := c.Update(ctx, &currDomain); err != nil {
+						d.log.Error(err, "error updating domain", "domain", desiredDomain)
 						return err
 					}
 				}
@@ -226,26 +232,28 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		}
 		if !found {
 			if err := c.Create(ctx, &desiredDomain); err != nil {
+				d.log.Error(err, "error creating domain", "domain", desiredDomain)
 				return err
 			}
 			break
 		}
 	}
 
-	for _, existingDomain := range currDomains.Items {
-		found := false
-		for _, desiredDomain := range desiredDomains {
-			if desiredDomain.Name == existingDomain.Name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			if err := c.Delete(ctx, &existingDomain); err != nil {
-				return err
-			}
-		}
-	}
+	// TODO:(initial-store) Determine if we should delete domains if they are no longer used
+	// for _, existingDomain := range currDomains.Items {
+	// 	found := false
+	// 	for _, desiredDomain := range desiredDomains {
+	// 		if desiredDomain.Name == existingDomain.Name {
+	// 			found = true
+	// 			break
+	// 		}
+	// 	}
+	// 	if !found {
+	// 		if err := c.Delete(ctx, &existingDomain); err != nil {
+	// 			return err
+	// 		}
+	// 	}
+	// }
 
 	for _, desiredEdge := range desiredEdges {
 		found := false
@@ -253,7 +261,8 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			if desiredEdge.Name == currEdge.Name {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
-					if err := c.Update(ctx, &desiredEdge); err != nil {
+					currEdge.Spec = desiredEdge.Spec
+					if err := c.Update(ctx, &currEdge); err != nil {
 						return err
 					}
 				}
@@ -278,7 +287,8 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			}
 		}
 		if !found {
-			if err := c.Delete(ctx, &existingEdge); err != nil {
+			if err := c.Delete(ctx, &existingEdge); client.IgnoreNotFound(err) != nil {
+				d.log.Error(err, "error deleting edge", "edge", existingEdge)
 				return err
 			}
 		}
@@ -290,7 +300,9 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			if desiredTunnel.Name == currTunnel.Name {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
-					if err := c.Update(ctx, &desiredTunnel); err != nil {
+					currTunnel.Spec = desiredTunnel.Spec
+					if err := c.Update(ctx, &currTunnel); err != nil {
+						d.log.Error(err, "error updating tunnel", "tunnel", desiredTunnel)
 						return err
 					}
 				}
@@ -300,6 +312,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		}
 		if !found {
 			if err := c.Create(ctx, &desiredTunnel); err != nil {
+				d.log.Error(err, "error creating tunnel", "tunnel", desiredTunnel)
 				return err
 			}
 			break
@@ -315,22 +328,12 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			}
 		}
 		if !found {
-			if err := c.Delete(ctx, &existingTunnel); err != nil {
+			if err := c.Delete(ctx, &existingTunnel); client.IgnoreNotFound(err) != nil {
+				d.log.Error(err, "error deleting tunnel", "tunnel", existingTunnel)
 				return err
 			}
 		}
 	}
-
-	// - calculates new domains
-	// 	- makes a call to get the current ones
-	// 	- diffs them, and reconciles the results
-	// 	- update status associated ingress objects with load balancer HostName (via k8s api
-	// - calculates new edges
-	// 	- makes a call to get the current ones
-	// 	- diffs them, and reconciles the results
-	// - calculates new tunnels
-	// 	- makes a call to get the current ones
-	// 	- diffs them, and reconciles the results
 
 	// TODO:(initial-store) - update the ingress objects status with the load balancer hostname
 	return nil
@@ -375,7 +378,7 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 				Namespace: domain.Namespace,
 			},
 			Spec: ingressv1alpha1.HTTPSEdgeSpec{
-				Hostports: []string{domain.Name + ":443"},
+				Hostports: []string{domain.Spec.Domain + ":443"},
 			},
 		}
 		var ngrokRoutes []ingressv1alpha1.HTTPSEdgeRouteSpec
