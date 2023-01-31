@@ -281,15 +281,18 @@ func (s Store) shouldHandleIngressIsValid(ing *netv1.Ingress) (bool, error) {
 	}
 	if len(ing.Spec.Rules) == 0 {
 		errs.AddError(fmt.Sprintf("At least one rule is required to be set"))
-	}
-	if ing.Spec.Rules[0].Host == "" {
-		errs.AddError(fmt.Sprintf("A host is required to be set"))
-	}
-	for _, path := range ing.Spec.Rules[0].HTTP.Paths {
-		if path.Backend.Resource != nil {
-			errs.AddError(fmt.Sprintf("Resource backends are not supported"))
+	} else {
+		if ing.Spec.Rules[0].Host == "" {
+			errs.AddError(fmt.Sprintf("A host is required to be set"))
+		}
+
+		for _, path := range ing.Spec.Rules[0].HTTP.Paths {
+			if path.Backend.Resource != nil {
+				errs.AddError(fmt.Sprintf("Resource backends are not supported"))
+			}
 		}
 	}
+
 	if errs.HasErrors() {
 		return false, errs
 	}

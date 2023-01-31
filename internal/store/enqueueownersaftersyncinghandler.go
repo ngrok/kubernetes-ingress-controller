@@ -14,6 +14,10 @@ import (
 var _ handler.EventHandler = &EnqueueOwnersAfterSyncingHandler{}
 
 type EnqueueOwnersAfterSyncingHandler struct {
+	// TODO:(initial-store) I'm not actually sure if this is necessary. If all these calls do the .Sync
+	// then we don't have to trigger a reconcile of the ingress object to get the data to be posted
+	// This also isn't correct for some types like ingress classes. Ingresses aren't the owners
+	// i don't think. I don't think you do it the other way around either?
 	ownerHandler handler.EnqueueRequestForOwner
 	driver       *Driver
 	log          logr.Logger
@@ -23,7 +27,7 @@ type EnqueueOwnersAfterSyncingHandler struct {
 func NewEnqueueOwnersAfterSyncingHandler(resourceName string, d *Driver, c client.Client) *EnqueueOwnersAfterSyncingHandler {
 	return &EnqueueOwnersAfterSyncingHandler{
 		ownerHandler: handler.EnqueueRequestForOwner{
-			IsController: false, // TODO: Figure out owner vs controller and see if this works
+			IsController: false, // TODO:(initial-store) Figure out owner vs controller and see if this works
 			OwnerType:    &netv1.Ingress{},
 		},
 		driver: d,
