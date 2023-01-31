@@ -76,7 +76,9 @@ func (r *HTTPSEdgeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	edge := new(ingressv1alpha1.HTTPSEdge)
 	if err := r.Get(ctx, req.NamespacedName, edge); err != nil {
-		log.Error(err, "unable to fetch Edge")
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to fetch Edge")
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 

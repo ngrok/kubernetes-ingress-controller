@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -51,11 +50,6 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&source.Kind{Type: &ingressv1alpha1.Domain{}},
 			handler.EnqueueRequestsFromMapFunc(irec.listIngressesForDomain),
 		).
-		WithEventFilter(
-			predicate.Funcs{
-				DeleteFunc: deleteFuncPredicateFilter,
-			},
-		).
 		Complete(irec)
 }
 
@@ -76,10 +70,8 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ingress := &netv1.Ingress{}
 	err := irec.Client.Get(ctx, req.NamespacedName, ingress)
 	if err != nil {
-		// If it is a NotFound Error
 		if client.IgnoreNotFound(err) == nil {
-			// TODO:(initial-store) remove this once i verify it works this way
-			log.Error(err, "In the reconcile loop, failed to get ingress which must mean a delete event occurred somehow even though we filter")
+			// If its fully gone, delete it from the store
 			return ctrl.Result{}, irec.Driver.DeleteIngress(req.NamespacedName)
 		}
 		return ctrl.Result{}, err // Otherwise, its a real error
@@ -258,6 +250,7 @@ func (irec *IngressReconciler) reconcileEdges(ctx context.Context, ingress *netv
 	}
 
 	found := &ingressv1alpha1.HTTPSEdge{}
+	// TODO:(initial-store) Replace this client call with a store call
 	err = irec.Client.Get(ctx, types.NamespacedName{Name: edge.Name, Namespace: edge.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
 		err = irec.Create(ctx, edge)
@@ -289,14 +282,16 @@ func (irec *IngressReconciler) reconcileDomains(ctx context.Context, ingress *ne
 	hasDomainsWithoutStatus := false
 
 	for _, reservedDomain := range reservedDomains {
+		log := ctrl.LoggerFrom(ctx).WithValues("namespace", reservedDomain.Namespace, "name", reservedDomain.Name)
 		found := &ingressv1alpha1.Domain{}
+		// TODO:(initial-store) Replace this client call with a store call
 		err := irec.Client.Get(ctx, types.NamespacedName{Name: reservedDomain.Name, Namespace: reservedDomain.Namespace}, found)
 		if err != nil {
 			if !errors.IsNotFound(err) {
 				return err
 			}
 
-			ctrl.LoggerFrom(ctx).Info("Creating domain", "namespace", reservedDomain.Namespace, "name", reservedDomain.Name)
+			log.Info("Creating domain", "namespace", reservedDomain.Namespace, "name", reservedDomain.Name)
 			err = irec.Create(ctx, &reservedDomain)
 			if err != nil {
 				return err
@@ -338,25 +333,39 @@ func (irec *IngressReconciler) reconcileTunnels(ctx context.Context, ingress *ne
 	tunnels := ingressToTunnels(ingress)
 
 	for _, tunnel := range tunnels {
+		log := ctrl.LoggerFrom(ctx).WithValues("tunnel", tunnel.Name, "namespace", tunnel.Namespace, "tunnel", tunnel)
+		log.Info("Reconciling tunnel")
 		if err := controllerutil.SetControllerReference(ingress, &tunnel, irec.Scheme); err != nil {
+			log.Error(err, "Failed to set controller reference")
 			return err
 		}
 
 		found := &ingressv1alpha1.Tunnel{}
+		// TODO:(initial-store) Replace this client call with a store call
 		err := irec.Client.Get(ctx, types.NamespacedName{Name: tunnel.Name, Namespace: tunnel.Namespace}, found)
-		if err != nil && errors.IsNotFound(err) {
-			err = irec.Create(ctx, &tunnel)
-			if err != nil {
-				return err
-			}
-		} else if err != nil {
+		log = log.WithValues("found", found)
+		if err != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to get tunnel")
 			return err
 		}
+		if err != nil && errors.IsNotFound(err) {
+			log.Info("Creating tunnel")
+			err = irec.Create(ctx, &tunnel)
+			if err != nil {
+				log.Error(err, "Failed to create tunnel")
+				return err
+			}
+			// If no error, return so we don't bother updating later
+			log.Info("Created tunnel")
+			continue
+		}
 
+		// Otherwise we found it, so lets make sure its up to date
 		if !reflect.DeepEqual(tunnel.Spec, found.Spec) {
 			found.Spec = tunnel.Spec
 			err = irec.Update(ctx, found)
 			if err != nil {
+				log.Error(err, "Failed to update tunnel")
 				return err
 			}
 		}
@@ -399,15 +408,10 @@ func (irec *IngressReconciler) listIngressesForDomain(obj client.Object) []recon
 		return []reconcile.Request{}
 	}
 
-	ingresses := &netv1.IngressList{}
-	if err := irec.Client.List(context.Background(), ingresses); err != nil {
-		irec.Log.Error(err, "failed to list ingresses for domain", "domain", domain.Spec.Domain)
-		return []reconcile.Request{}
-	}
-
+	ingresses := irec.Driver.Store.ListNgrokIngressesV1()
 	recs := []reconcile.Request{}
 
-	for _, ingress := range ingresses.Items {
+	for _, ingress := range ingresses {
 		for _, rule := range ingress.Spec.Rules {
 			if rule.Host == domain.Status.Domain {
 				recs = append(recs, reconcile.Request{
