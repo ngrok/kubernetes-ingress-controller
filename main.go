@@ -158,7 +158,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 		Scheme:               mgr.GetScheme(),
 		Recorder:             mgr.GetEventRecorderFor("ingress-controller"),
 		Namespace:            opts.namespace,
-		AnnotationsExtractor: annotations.NewAnnotationsExtractor(),
+		AnnotationsExtractor: annotations.NewAnnotationsExtractor(), // TODO:(initial-store) remove these
 		Driver:               driver,
 	}).SetupWithManager(mgr, driver); err != nil {
 		return fmt.Errorf("unable to create ingress controller: %w", err)
@@ -243,7 +243,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 // getDriver returns a new Driver instance that is seeded with the current state of the cluster.
 func getDriver(ctx context.Context, mgr manager.Manager) (*store.Driver, error) {
 	logger := mgr.GetLogger().WithName("cache-store-driver")
-	d := store.NewDriver(logger)
+	d := store.NewDriver(logger, mgr.GetScheme())
 	if err := d.Seed(ctx, mgr.GetAPIReader()); err != nil {
 		return nil, fmt.Errorf("unable to seed cache store: %w", err)
 	}

@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/go-logr/logr"
 	netv1 "k8s.io/api/networking/v1"
@@ -11,10 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -28,16 +32,18 @@ type Driver struct {
 	Store       Storer
 	cacheStores CacheStores
 	log         logr.Logger
+	scheme      *runtime.Scheme
 }
 
 // NewDriver creates a new driver with a basic logger and cache store setup
-func NewDriver(logger logr.Logger) *Driver {
+func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 	cacheStores := NewCacheStores(logger)
 	s := New(cacheStores, controllerName, logger)
 	return &Driver{
 		Store:       s,
 		cacheStores: cacheStores,
 		log:         logger,
+		scheme:      scheme,
 	}
 }
 
@@ -146,7 +152,6 @@ func (e *EnqueueOwnersAfterSyncing) Create(evt event.CreateEvent, q workqueue.Ra
 		e.driver.log.Error(err, "error updating object", "object", evt.Object)
 		return
 	}
-	e.driver.log.Info("Enqueue called for Create and passed")
 	// Sync then call OwnersHandler
 	e.driver.Sync(context.Background(), e.client)
 	e.ownerHandler.Create(evt, q)
@@ -158,7 +163,6 @@ func (e *EnqueueOwnersAfterSyncing) Update(evt event.UpdateEvent, q workqueue.Ra
 		e.driver.log.Error(err, "error updating object", "object", evt.ObjectNew)
 		return
 	}
-	e.driver.log.Info("Enqueue called for Update and passed")
 	// Sync then call OwnersHandler
 	e.driver.Sync(context.Background(), e.client)
 	e.ownerHandler.Update(evt, q)
@@ -170,7 +174,6 @@ func (e *EnqueueOwnersAfterSyncing) Delete(evt event.DeleteEvent, q workqueue.Ra
 		e.driver.log.Error(err, "error deleting object", "object", evt.Object)
 		return
 	}
-	e.driver.log.Info("Enqueue called for Delete and passed")
 	// Sync then call OwnersHandler
 	e.driver.Sync(context.Background(), e.client)
 	e.ownerHandler.Delete(evt, q)
@@ -182,7 +185,6 @@ func (e *EnqueueOwnersAfterSyncing) Generic(evt event.GenericEvent, q workqueue.
 		e.driver.log.Error(err, "error updating object", "object", evt.Object)
 		return
 	}
-	e.driver.log.Info("Enqueue called for Generic and passed")
 	// Sync then call OwnersHandler
 	e.driver.Sync(context.Background(), e.client)
 	e.ownerHandler.Generic(evt, q)
@@ -190,6 +192,135 @@ func (e *EnqueueOwnersAfterSyncing) Generic(evt event.GenericEvent, q workqueue.
 
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	d.log.Info("syncing driver state!!")
+	desiredDomains := d.calculateDomains()
+	desiredEdges := d.calculateHTTPSEdges()
+	desiredTunnels := d.calculateTunnels()
+
+	var currDomains *ingressv1alpha1.DomainList
+	var currEdges *ingressv1alpha1.HTTPSEdgeList
+	var currTunnels *ingressv1alpha1.TunnelList
+
+	if err := c.List(ctx, currDomains); err != nil {
+		return err
+	}
+	if err := c.List(ctx, currEdges); err != nil {
+		return err
+	}
+	if err := c.List(ctx, currTunnels); err != nil {
+		return err
+	}
+
+	for _, desiredDomain := range desiredDomains {
+		found := false
+		for _, currDomain := range currDomains.Items {
+			if desiredDomain.Name == currDomain.Name {
+				// It matches so lets update it if anything is different
+				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
+					if err := c.Update(ctx, &desiredDomain); err != nil {
+						return err
+					}
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Create(ctx, &desiredDomain); err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	for _, existingDomain := range currDomains.Items {
+		found := false
+		for _, desiredDomain := range desiredDomains {
+			if desiredDomain.Name == existingDomain.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Delete(ctx, &existingDomain); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, desiredEdge := range desiredEdges {
+		found := false
+		for _, currEdge := range currEdges.Items {
+			if desiredEdge.Name == currEdge.Name {
+				// It matches so lets update it if anything is different
+				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
+					if err := c.Update(ctx, &desiredEdge); err != nil {
+						return err
+					}
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Create(ctx, &desiredEdge); err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	for _, existingEdge := range currEdges.Items {
+		found := false
+		for _, desiredEdge := range desiredEdges {
+			if desiredEdge.Name == existingEdge.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Delete(ctx, &existingEdge); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, desiredTunnel := range desiredTunnels {
+		found := false
+		for _, currTunnel := range currTunnels.Items {
+			if desiredTunnel.Name == currTunnel.Name {
+				// It matches so lets update it if anything is different
+				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
+					if err := c.Update(ctx, &desiredTunnel); err != nil {
+						return err
+					}
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Create(ctx, &desiredTunnel); err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	for _, existingTunnel := range currTunnels.Items {
+		found := false
+		for _, desiredTunnel := range desiredTunnels {
+			if desiredTunnel.Name == existingTunnel.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := c.Delete(ctx, &existingTunnel); err != nil {
+				return err
+			}
+		}
+	}
+
 	// - calculates new domains
 	// 	- makes a call to get the current ones
 	// 	- diffs them, and reconciles the results
@@ -200,49 +331,138 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	// - calculates new tunnels
 	// 	- makes a call to get the current ones
 	// 	- diffs them, and reconciles the results
-	// - TODO: Probably set SetOwnerReference for each instead of how we do SetControllerReference
 
+	// TODO:(initial-store) - update the ingress objects status with the load balancer hostname
 	return nil
 }
 
-func ingressToTunnels(ingress *netv1.Ingress) []ingressv1alpha1.Tunnel {
-	tunnels := make([]ingressv1alpha1.Tunnel, 0)
-
-	if ingress == nil || len(ingress.Spec.Rules) == 0 {
-		return tunnels
-	}
-
-	// Tunnels should be unique on a service and port basis so if they are referenced more than once, we
-	// only create one tunnel per service and port.
-	tunnelMap := make(map[string]ingressv1alpha1.Tunnel)
-	for _, rule := range ingress.Spec.Rules {
-		if rule.Host == "" {
-			continue
-		}
-
-		for _, path := range rule.HTTP.Paths {
-			serviceName := path.Backend.Service.Name
-			servicePort := path.Backend.Service.Port.Number
-			tunnelAddr := fmt.Sprintf("%s.%s.%s:%d", serviceName, ingress.Namespace, clusterDomain, servicePort)
-			tunnelName := fmt.Sprintf("%s-%d", serviceName, servicePort)
-
-			tunnelMap[tunnelName] = ingressv1alpha1.Tunnel{
+// TODO:(initial-store) - set the SetOwnerReference
+func (d *Driver) calculateDomains() []ingressv1alpha1.Domain {
+	// make a map of string to domains
+	domainMap := make(map[string]ingressv1alpha1.Domain)
+	ingresses := d.Store.ListNgrokIngressesV1()
+	for _, ingress := range ingresses {
+		for _, rule := range ingress.Spec.Rules {
+			if rule.Host == "" {
+				continue
+			}
+			domainMap[rule.Host] = ingressv1alpha1.Domain{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      tunnelName,
+					Name:      strings.Replace(rule.Host, ".", "-", -1),
 					Namespace: ingress.Namespace,
 				},
-				Spec: ingressv1alpha1.TunnelSpec{
-					ForwardsTo: tunnelAddr,
-					Labels:     backendToLabelMap(path.Backend, ingress.Namespace),
+				Spec: ingressv1alpha1.DomainSpec{
+					Domain: rule.Host,
 				},
 			}
 		}
 	}
+	domains := make([]ingressv1alpha1.Domain, 0, len(domainMap))
+	for _, domain := range domainMap {
+		domains = append(domains, domain)
+	}
+	return domains
+}
 
+func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
+	domains := d.calculateDomains()
+	ingresses := d.Store.ListNgrokIngressesV1()
+	edges := make([]ingressv1alpha1.HTTPSEdge, 0, len(domains))
+	for _, domain := range domains {
+		edge := ingressv1alpha1.HTTPSEdge{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      domain.Name,
+				Namespace: domain.Namespace,
+			},
+			Spec: ingressv1alpha1.HTTPSEdgeSpec{
+				Hostports: []string{domain.Name + ":443"},
+			},
+		}
+		var ngrokRoutes []ingressv1alpha1.HTTPSEdgeRouteSpec
+		for _, ingress := range ingresses {
+			for _, rule := range ingress.Spec.Rules {
+				if rule.Host == domain.Spec.Domain {
+					edge.GetAnnotations()
+					err := controllerutil.SetOwnerReference(ingress, &edge, d.scheme)
+					if err != nil {
+						// TODO:(initial-store) handle this error
+						panic(err)
+					}
+					var matchType string
+					parsedRouteModules := annotations.NewAnnotationsExtractor().Extract(ingress)
+
+					for _, httpIngressPath := range rule.HTTP.Paths {
+						switch *httpIngressPath.PathType {
+						case netv1.PathTypePrefix:
+							matchType = "path_prefix"
+						case netv1.PathTypeExact:
+							matchType = "exact_path"
+						case netv1.PathTypeImplementationSpecific:
+							matchType = "path_prefix" // Path Prefix seems like a sane default for most cases
+						default:
+							d.log.Error(fmt.Errorf("unknown path type"), "unknown path type", "pathType", *httpIngressPath.PathType)
+							return nil
+						}
+
+						route := ingressv1alpha1.HTTPSEdgeRouteSpec{
+							Match:     httpIngressPath.Path,
+							MatchType: matchType,
+							Backend: ingressv1alpha1.TunnelGroupBackend{
+								Labels: backendToLabelMap(httpIngressPath.Backend, ingress.Namespace),
+							},
+							Compression:   parsedRouteModules.Compression,
+							IPRestriction: parsedRouteModules.IPRestriction,
+							Headers:       parsedRouteModules.Headers,
+						}
+
+						ngrokRoutes = append(ngrokRoutes, route)
+					}
+				}
+			}
+		}
+		// After all the ingresses, update the edge with the routes
+		edge.Spec.Routes = ngrokRoutes
+		edges = append(edges, edge)
+	}
+
+	return edges
+}
+
+// TODO:(initial-store) - set the SetOwnerReference
+func (d *Driver) calculateTunnels() []ingressv1alpha1.Tunnel {
+	// Tunnels should be unique on a service and port basis so if they are referenced more than once, we
+	// only create one tunnel per service and port.
+	tunnelMap := make(map[string]ingressv1alpha1.Tunnel)
+	ingresses := d.Store.ListNgrokIngressesV1()
+	for _, ingress := range ingresses {
+		for _, rule := range ingress.Spec.Rules {
+			if rule.Host == "" {
+				continue
+			}
+			for _, path := range rule.HTTP.Paths {
+				serviceName := path.Backend.Service.Name
+				servicePort := path.Backend.Service.Port.Number
+				tunnelAddr := fmt.Sprintf("%s.%s.%s:%d", serviceName, ingress.Namespace, clusterDomain, servicePort)
+				tunnelName := fmt.Sprintf("%s-%d", serviceName, servicePort)
+
+				tunnelMap[tunnelName] = ingressv1alpha1.Tunnel{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      tunnelName,
+						Namespace: ingress.Namespace,
+					},
+					Spec: ingressv1alpha1.TunnelSpec{
+						ForwardsTo: tunnelAddr,
+						Labels:     backendToLabelMap(path.Backend, ingress.Namespace),
+					},
+				}
+			}
+		}
+	}
+
+	tunnels := make([]ingressv1alpha1.Tunnel, 0, len(tunnelMap))
 	for _, tunnel := range tunnelMap {
 		tunnels = append(tunnels, tunnel)
 	}
-
 	return tunnels
 }
 
