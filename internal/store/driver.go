@@ -6,16 +6,14 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
@@ -33,6 +31,7 @@ type Driver struct {
 	cacheStores CacheStores
 	log         logr.Logger
 	scheme      *runtime.Scheme
+	l           *sync.RWMutex
 }
 
 // NewDriver creates a new driver with a basic logger and cache store setup
@@ -44,6 +43,7 @@ func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 		cacheStores: cacheStores,
 		log:         logger,
 		scheme:      scheme,
+		l:           &sync.RWMutex{},
 	}
 }
 
@@ -52,29 +52,46 @@ func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 // each calculation will be based on an incomplete state of the world. It currently relies on:
 // - Ingresses
 // - IngressClasses
-// - Secrets // TODO:(initial-store)
-// - Domains // TODO:(initial-store)
-// - Edges // TODO:(initial-store)
-// - other ngrok ones? Anything the ingress controller watches or creates basically
+// - Secrets
+// - Domains
+// - Edges
 func (d *Driver) Seed(ctx context.Context, c client.Reader) error {
 	ingresses := &netv1.IngressList{}
 	if err := c.List(ctx, ingresses); err != nil {
 		return err
 	}
-
-	ingressClasses := &netv1.IngressClassList{}
-	if err := c.List(ctx, ingressClasses); err != nil {
-		return err
-	}
-
 	for _, ing := range ingresses.Items {
 		if err := d.Update(&ing); err != nil {
 			return err
 		}
 	}
 
+	ingressClasses := &netv1.IngressClassList{}
+	if err := c.List(ctx, ingressClasses); err != nil {
+		return err
+	}
 	for _, ingClass := range ingressClasses.Items {
 		if err := d.Update(&ingClass); err != nil {
+			return err
+		}
+	}
+
+	domains := &ingressv1alpha1.DomainList{}
+	if err := c.List(ctx, domains); err != nil {
+		return err
+	}
+	for _, domain := range domains.Items {
+		if err := d.Update(&domain); err != nil {
+			return err
+		}
+	}
+
+	edges := &ingressv1alpha1.HTTPSEdgeList{}
+	if err := c.List(ctx, edges); err != nil {
+		return err
+	}
+	for _, edge := range edges.Items {
+		if err := d.Update(&edge); err != nil {
 			return err
 		}
 	}
@@ -106,94 +123,12 @@ func (d *Driver) Update(obj runtime.Object) error {
 	return d.cacheStores.Add(obj.DeepCopyObject())
 }
 
-// func (d *Driver) ListIngressesV1ForDomains(domains []string) ([]*netv1.Ingress, error) {
-// 	matchingIngs := make([]*netv1.Ingress, 0)
-// 	ingresses := d.Store.ListNgrokIngressesV1()
-// 	for _, ingress := range ingresses {
-// 		for _, rule := range ingress.Spec.Rules {
-// 			for _, domain := range domains {
-// 				// If the rule host matches the domain, or if there is no host for the rule
-// 				// then it applies so we technically match
-// 				if rule.Host == domain || rule.Host == "" {
-// 					matchingIngs = append(matchingIngs, ingress)
-// 					break
-// 				}
-// 			}
-// 		}
-// 	}
-// }
-
-type empty struct{}
-
-var _ handler.EventHandler = &EnqueueOwnersAfterSyncing{}
-
-// func EnqueueOwnersAfterSyncing
-
-type EnqueueOwnersAfterSyncing struct {
-	ownerHandler handler.EnqueueRequestForOwner
-	driver       *Driver
-	log          logr.Logger
-	client       client.Client
-}
-
-func NewEnqueueOwnersAfterSyncing(resourceName string, d *Driver, c client.Client) *EnqueueOwnersAfterSyncing {
-	return &EnqueueOwnersAfterSyncing{
-		ownerHandler: handler.EnqueueRequestForOwner{
-			IsController: false, // TODO: Figure out owner vs controller and see if this works
-			OwnerType:    &netv1.Ingress{},
-		},
-		driver: d,
-		log:    d.log.WithValues("EnqueueOwnersAfterSyncingFor", resourceName),
-		client: c,
-	}
-}
-
-func (e *EnqueueOwnersAfterSyncing) Create(evt event.CreateEvent, q workqueue.RateLimitingInterface) {
-	err := e.driver.Update(evt.Object)
-	if err != nil {
-		e.log.Error(err, "error updating object", "object", evt.Object)
-		return
-	}
-	// Sync then call OwnersHandler
-	e.driver.Sync(context.Background(), e.client)
-	e.ownerHandler.Create(evt, q)
-}
-
-func (e *EnqueueOwnersAfterSyncing) Update(evt event.UpdateEvent, q workqueue.RateLimitingInterface) {
-	err := e.driver.Update(evt.ObjectNew)
-	if err != nil {
-		e.log.Error(err, "error updating object", "object", evt.ObjectNew)
-		return
-	}
-	// Sync then call OwnersHandler
-	e.driver.Sync(context.Background(), e.client)
-	e.ownerHandler.Update(evt, q)
-}
-
-func (e *EnqueueOwnersAfterSyncing) Delete(evt event.DeleteEvent, q workqueue.RateLimitingInterface) {
-	err := e.driver.Delete(evt.Object)
-	if err != nil {
-		e.log.Error(err, "error deleting object", "object", evt.Object)
-		return
-	}
-	// Sync then call OwnersHandler
-	e.driver.Sync(context.Background(), e.client)
-	e.ownerHandler.Delete(evt, q)
-}
-
-func (e *EnqueueOwnersAfterSyncing) Generic(evt event.GenericEvent, q workqueue.RateLimitingInterface) {
-	err := e.driver.Update(evt.Object)
-	if err != nil {
-		e.log.Error(err, "error updating object", "object", evt.Object)
-		return
-	}
-	// Sync then call OwnersHandler
-	e.driver.Sync(context.Background(), e.client)
-	e.ownerHandler.Generic(evt, q)
-}
-
 // TODO:(initial-store): This thing needs to be dried up somehow
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
+	// TODO:(initial-store): Remove these mutexes as they didn't help with the issue with objects being modified
+	d.l.Lock()
+	defer d.l.Unlock()
+
 	d.log.Info("syncing driver state!!")
 	desiredDomains := d.calculateDomains()
 	desiredEdges := d.calculateHTTPSEdges()
@@ -221,6 +156,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		for _, currDomain := range currDomains.Items {
 			if desiredDomain.Name == currDomain.Name {
 				// It matches so lets update it if anything is different
+				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
 					currDomain.Spec = desiredDomain.Spec
 					if err := c.Update(ctx, &currDomain); err != nil {
@@ -262,9 +198,13 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		for _, currEdge := range currEdges.Items {
 			if desiredEdge.Name == currEdge.Name {
 				// It matches so lets update it if anything is different
+				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
 					currEdge.Spec = desiredEdge.Spec
 					if err := c.Update(ctx, &currEdge); err != nil {
+						// TODO:(initial-store) This is failing (but eventually succeeding) on this call with this error
+						// Operation cannot be fulfilled on httpsedges.ingress.k8s.ngrok.com \"bezek-hello-world-ingress-ngrok-io\": the object has been modified; please apply your changes to the latest version and try again
+						d.log.Error(err, "error updating edge", "desiredEdge", desiredEdge, "currEdge", currEdge)
 						return err
 					}
 				}
@@ -301,6 +241,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		for _, currTunnel := range currTunnels.Items {
 			if desiredTunnel.Name == currTunnel.Name {
 				// It matches so lets update it if anything is different
+				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
 					currTunnel.Spec = desiredTunnel.Spec
 					if err := c.Update(ctx, &currTunnel); err != nil {

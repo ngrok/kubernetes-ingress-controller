@@ -31,18 +31,22 @@ type IngressReconciler struct {
 func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Driver) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.Ingress{}).
-		// TODO:(initial-store): Watch ingress classes and create a basic function to find all ings for thats class
+		// TODO:(initial-store): Dry up these setups
+		Watches(
+			&source.Kind{Type: &netv1.IngressClass{}},
+			store.NewEnqueueOwnersAfterSyncingHandler("IngressClasses", d, mgr.GetClient()),
+		).
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.Domain{}},
-			store.NewEnqueueOwnersAfterSyncing("Domains", d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncingHandler("Domains", d, mgr.GetClient()),
 		).
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.HTTPSEdge{}},
-			store.NewEnqueueOwnersAfterSyncing("HTTPSEdges", d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncingHandler("HTTPSEdges", d, mgr.GetClient()),
 		).
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.Tunnel{}},
-			store.NewEnqueueOwnersAfterSyncing("Tunnels", d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncingHandler("Tunnels", d, mgr.GetClient()),
 		).
 		Complete(irec)
 }
@@ -64,22 +68,22 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ingress := &netv1.Ingress{}
 	err := irec.Client.Get(ctx, req.NamespacedName, ingress)
 	if err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// If its fully gone, delete it from the store
-			if err := irec.Driver.DeleteIngress(req.NamespacedName); err != nil {
-				log.Error(err, "Failed to delete ingress from store")
-				return ctrl.Result{}, err
-			}
-
-			err = irec.Driver.Sync(ctx, irec.Client)
-			if err != nil {
-				log.Error(err, "Failed to sync ingress to store")
-				return ctrl.Result{}, err
-			}
-
-			return ctrl.Result{}, nil
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err // its a real error
 		}
-		return ctrl.Result{}, err // Otherwise, its a real error
+		// Otherwise its a not found errors. If its fully gone, delete it from the store
+		if err := irec.Driver.DeleteIngress(req.NamespacedName); err != nil {
+			log.Error(err, "Failed to delete ingress from store")
+			return ctrl.Result{}, err
+		}
+
+		err = irec.Driver.Sync(ctx, irec.Client)
+		if err != nil {
+			log.Error(err, "Failed to sync after removing ingress from store")
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{}, nil
 	}
 
 	// Ensure the ingress object is up to date in the store

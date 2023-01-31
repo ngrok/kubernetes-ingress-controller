@@ -21,14 +21,11 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 
 	netv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/go-logr/logr"
 )
@@ -71,127 +68,12 @@ type Store struct {
 
 var _ Storer = Store{}
 
-// CacheStores stores cache.Store for all Kinds of k8s objects that
-// the Ingress Controller reads.
-type CacheStores struct {
-	// Core Kubernetes Stores
-	IngressV1      cache.Store
-	IngressClassV1 cache.Store
-
-	// Ngrok Stores
-	DomainV1    cache.Store
-	TunnelV1    cache.Store
-	HTTPSEdgeV1 cache.Store
-
-	log logr.Logger
-	l   *sync.RWMutex
-}
-
-// NewCacheStores is a convenience function for CacheStores to initialize all attributes with new cache stores.
-func NewCacheStores(logger logr.Logger) CacheStores {
-	return CacheStores{
-		IngressV1:      cache.NewStore(keyFunc),
-		IngressClassV1: cache.NewStore(keyFunc),
-		DomainV1:       cache.NewStore(keyFunc),
-		TunnelV1:       cache.NewStore(keyFunc),
-		HTTPSEdgeV1:    cache.NewStore(keyFunc),
-		l:              &sync.RWMutex{},
-		log:            logger,
-	}
-}
-
 // New creates a new object store to be used in the ingress controller.
 func New(cs CacheStores, controllerName string, logger logr.Logger) Storer {
 	return Store{
 		stores:         cs,
 		controllerName: controllerName,
 		log:            logger,
-	}
-}
-
-// Get checks whether or not there's already some version of the provided object present in the cache.
-// The CacheStore must be initialized (see NewCacheStores()) or this will panic.
-func (c CacheStores) Get(obj runtime.Object) (item interface{}, exists bool, err error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
-
-	switch obj := obj.(type) {
-	// ----------------------------------------------------------------------------
-	// Kubernetes Core API Support
-	// ----------------------------------------------------------------------------
-	case *netv1.Ingress:
-		return c.IngressV1.Get(obj)
-	case *netv1.IngressClass:
-		return c.IngressClassV1.Get(obj)
-		// ----------------------------------------------------------------------------
-	// Ngrok API Support
-	// ----------------------------------------------------------------------------
-	case *ingressv1alpha1.Domain:
-		return c.DomainV1.Get(obj)
-	case *ingressv1alpha1.Tunnel:
-		return c.TunnelV1.Get(obj)
-	case *ingressv1alpha1.HTTPSEdge:
-		return c.HTTPSEdgeV1.Get(obj)
-	default:
-		return nil, false, fmt.Errorf("unsupported object type: %T", obj)
-	}
-}
-
-// Add stores a provided runtime.Object into the CacheStore if it's of a supported type.
-// The CacheStore must be initialized (see NewCacheStores()) or this will panic.
-func (c CacheStores) Add(obj runtime.Object) error {
-	c.l.Lock()
-	defer c.l.Unlock()
-
-	switch obj := obj.(type) {
-	// ----------------------------------------------------------------------------
-	// Kubernetes Core API Support
-	// ----------------------------------------------------------------------------
-	case *netv1.Ingress:
-		return c.IngressV1.Add(obj)
-
-	case *netv1.IngressClass:
-		return c.IngressClassV1.Add(obj)
-		// ----------------------------------------------------------------------------
-	// Ngrok API Support
-	// ----------------------------------------------------------------------------
-	case *ingressv1alpha1.Domain:
-		return c.DomainV1.Add(obj)
-	case *ingressv1alpha1.Tunnel:
-		return c.TunnelV1.Add(obj)
-	case *ingressv1alpha1.HTTPSEdge:
-		return c.HTTPSEdgeV1.Add(obj)
-
-	default:
-		return fmt.Errorf("unsupported object type: %T", obj)
-	}
-}
-
-// Delete removes a provided runtime.Object from the CacheStore if it's of a supported type.
-// The CacheStore must be initialized (see NewCacheStores()) or this will panic.
-func (c CacheStores) Delete(obj runtime.Object) error {
-	c.l.Lock()
-	defer c.l.Unlock()
-
-	switch obj := obj.(type) {
-	// ----------------------------------------------------------------------------
-	// Kubernetes Core API Support
-	// ----------------------------------------------------------------------------
-	case *netv1.Ingress:
-		return c.IngressV1.Delete(obj)
-	case *netv1.IngressClass:
-		return c.IngressClassV1.Delete(obj)
-		// ----------------------------------------------------------------------------
-	// Ngrok API Support
-	// ----------------------------------------------------------------------------
-	case *ingressv1alpha1.Domain:
-		return c.DomainV1.Delete(obj)
-	case *ingressv1alpha1.Tunnel:
-		return c.TunnelV1.Delete(obj)
-	case *ingressv1alpha1.HTTPSEdge:
-		return c.HTTPSEdgeV1.Delete(obj)
-	default:
-		return fmt.Errorf("unsupported object type: %T", obj)
 	}
 }
 
