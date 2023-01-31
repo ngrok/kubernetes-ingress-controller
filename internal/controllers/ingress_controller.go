@@ -34,15 +34,15 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Drive
 		// TODO:(initial-store): Watch ingress classes and create a basic function to find all ings for thats class
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.Domain{}},
-			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncing("Domains", d, mgr.GetClient()),
 		).
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.HTTPSEdge{}},
-			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncing("HTTPSEdges", d, mgr.GetClient()),
 		).
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.Tunnel{}},
-			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
+			store.NewEnqueueOwnersAfterSyncing("Tunnels", d, mgr.GetClient()),
 		).
 		Complete(irec)
 }
@@ -77,6 +77,7 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err // Otherwise, its a real error
 	}

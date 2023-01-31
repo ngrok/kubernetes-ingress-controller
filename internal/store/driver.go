@@ -132,16 +132,18 @@ var _ handler.EventHandler = &EnqueueOwnersAfterSyncing{}
 type EnqueueOwnersAfterSyncing struct {
 	ownerHandler handler.EnqueueRequestForOwner
 	driver       *Driver
+	log          logr.Logger
 	client       client.Client
 }
 
-func NewEnqueueOwnersAfterSyncing(d *Driver, c client.Client) *EnqueueOwnersAfterSyncing {
+func NewEnqueueOwnersAfterSyncing(resourceName string, d *Driver, c client.Client) *EnqueueOwnersAfterSyncing {
 	return &EnqueueOwnersAfterSyncing{
 		ownerHandler: handler.EnqueueRequestForOwner{
 			IsController: false, // TODO: Figure out owner vs controller and see if this works
 			OwnerType:    &netv1.Ingress{},
 		},
 		driver: d,
+		log:    d.log.WithValues("EnqueueOwnersAfterSyncingFor", resourceName),
 		client: c,
 	}
 }
@@ -149,7 +151,7 @@ func NewEnqueueOwnersAfterSyncing(d *Driver, c client.Client) *EnqueueOwnersAfte
 func (e *EnqueueOwnersAfterSyncing) Create(evt event.CreateEvent, q workqueue.RateLimitingInterface) {
 	err := e.driver.Update(evt.Object)
 	if err != nil {
-		e.driver.log.Error(err, "error updating object", "object", evt.Object)
+		e.log.Error(err, "error updating object", "object", evt.Object)
 		return
 	}
 	// Sync then call OwnersHandler
@@ -160,7 +162,7 @@ func (e *EnqueueOwnersAfterSyncing) Create(evt event.CreateEvent, q workqueue.Ra
 func (e *EnqueueOwnersAfterSyncing) Update(evt event.UpdateEvent, q workqueue.RateLimitingInterface) {
 	err := e.driver.Update(evt.ObjectNew)
 	if err != nil {
-		e.driver.log.Error(err, "error updating object", "object", evt.ObjectNew)
+		e.log.Error(err, "error updating object", "object", evt.ObjectNew)
 		return
 	}
 	// Sync then call OwnersHandler
@@ -171,7 +173,7 @@ func (e *EnqueueOwnersAfterSyncing) Update(evt event.UpdateEvent, q workqueue.Ra
 func (e *EnqueueOwnersAfterSyncing) Delete(evt event.DeleteEvent, q workqueue.RateLimitingInterface) {
 	err := e.driver.Delete(evt.Object)
 	if err != nil {
-		e.driver.log.Error(err, "error deleting object", "object", evt.Object)
+		e.log.Error(err, "error deleting object", "object", evt.Object)
 		return
 	}
 	// Sync then call OwnersHandler
@@ -182,7 +184,7 @@ func (e *EnqueueOwnersAfterSyncing) Delete(evt event.DeleteEvent, q workqueue.Ra
 func (e *EnqueueOwnersAfterSyncing) Generic(evt event.GenericEvent, q workqueue.RateLimitingInterface) {
 	err := e.driver.Update(evt.Object)
 	if err != nil {
-		e.driver.log.Error(err, "error updating object", "object", evt.Object)
+		e.log.Error(err, "error updating object", "object", evt.Object)
 		return
 	}
 	// Sync then call OwnersHandler
