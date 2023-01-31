@@ -1,8 +1,5 @@
 package store
 
-// Create basic test harness to initialize a NewCacheStores object and then create a store object
-// and add it to the cacheStores map
-
 import (
 	"fmt"
 	"testing"
@@ -12,7 +9,13 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	// . "github.com/onsi/ginkgo/v2"
+	// . "github.com/onsi/gomega"
 )
+
+// var _ = Describe("Books", func() {
+
+// })
 
 func TestDriver(t *testing.T) {
 	// // create a fake logger to pass into the cachestore

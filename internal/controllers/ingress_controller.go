@@ -29,26 +29,21 @@ type IngressReconciler struct {
 
 // Create a new controller using our reconciler and set it up with the manager
 func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Driver) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.Ingress{}).
-		// TODO:(initial-store): Dry up these setups
-		Watches(
-			&source.Kind{Type: &netv1.IngressClass{}},
-			store.NewEnqueueOwnersAfterSyncingHandler("IngressClasses", d, mgr.GetClient()),
-		).
-		Watches(
-			&source.Kind{Type: &ingressv1alpha1.Domain{}},
-			store.NewEnqueueOwnersAfterSyncingHandler("Domains", d, mgr.GetClient()),
-		).
-		Watches(
-			&source.Kind{Type: &ingressv1alpha1.HTTPSEdge{}},
-			store.NewEnqueueOwnersAfterSyncingHandler("HTTPSEdges", d, mgr.GetClient()),
-		).
-		Watches(
-			&source.Kind{Type: &ingressv1alpha1.Tunnel{}},
-			store.NewEnqueueOwnersAfterSyncingHandler("Tunnels", d, mgr.GetClient()),
-		).
-		Complete(irec)
+	storedResources := []client.Object{
+		&netv1.IngressClass{},
+		&ingressv1alpha1.Domain{},
+		&ingressv1alpha1.HTTPSEdge{},
+		&ingressv1alpha1.Tunnel{},
+	}
+
+	builder := ctrl.NewControllerManagedBy(mgr).For(&netv1.Ingress{})
+	for _, obj := range storedResources {
+		builder = builder.Watches(
+			&source.Kind{Type: obj},
+			store.NewUpdateStoreHandler(obj.GetObjectKind().GroupVersionKind().Kind, d))
+	}
+
+	return builder.Complete(irec)
 }
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch

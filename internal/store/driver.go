@@ -6,14 +6,14 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-logr/logr"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
@@ -21,17 +21,17 @@ import (
 )
 
 // The name of the ingress controller which is uses to match on ingress classes
-const controllerName = "k8s.ngrok.com/ingress-controller" // TODO:(initial-store) Let the user configure this
+const controllerName = "k8s.ngrok.com/ingress-controller" // TODO:Let the user configure this
 const clusterDomain = "svc.cluster.local"                 // TODO: We can technically figure this out by looking at things like our resolv.conf or we can just take this as a helm option
 
 // Driver maintains the store of information, can derive new information from the store, and can
 // synchronize the desired state of the store to the actual state of the cluster.
 type Driver struct {
-	Store       Storer
-	cacheStores CacheStores
-	log         logr.Logger
-	scheme      *runtime.Scheme
-	l           *sync.RWMutex
+	Store          Storer // TODO:(initial-store) This should be private
+	cacheStores    CacheStores
+	log            logr.Logger
+	scheme         *runtime.Scheme
+	reentranceFlag int64
 }
 
 // NewDriver creates a new driver with a basic logger and cache store setup
@@ -43,7 +43,6 @@ func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 		cacheStores: cacheStores,
 		log:         logger,
 		scheme:      scheme,
-		l:           &sync.RWMutex{},
 	}
 }
 
@@ -123,11 +122,22 @@ func (d *Driver) Update(obj runtime.Object) error {
 	return d.cacheStores.Add(obj.DeepCopyObject())
 }
 
-// TODO:(initial-store): This thing needs to be dried up somehow
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
-	// TODO:(initial-store): Remove these mutexes as they didn't help with the issue with objects being modified
-	d.l.Lock()
-	defer d.l.Unlock()
+	// This function gets called a lot in the current architecture. At the end it also syncs
+	// resources which in turn triggers more reconcile events. Its all eventually consistent, but
+	// its noisy and can make us hit ngrok api limits. We should probably just change this to be
+	// a periodic sync instead of a sync on every reconcile event, but for now this debouncer
+	// keeps it in check and syncs in batches
+	if atomic.CompareAndSwapInt64(&d.reentranceFlag, 0, 1) {
+
+		defer func() {
+			time.Sleep(10 * time.Second)
+			atomic.StoreInt64(&(d.reentranceFlag), 0)
+		}()
+	} else {
+		d.log.Info("sync already in progress, skipping")
+		return nil
+	}
 
 	d.log.Info("syncing driver state!!")
 	desiredDomains := d.calculateDomains()
@@ -156,7 +166,6 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		for _, currDomain := range currDomains.Items {
 			if desiredDomain.Name == currDomain.Name {
 				// It matches so lets update it if anything is different
-				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
 					currDomain.Spec = desiredDomain.Spec
 					if err := c.Update(ctx, &currDomain); err != nil {
@@ -176,34 +185,16 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			break
 		}
 	}
-
-	// TODO:(initial-store) Determine if we should delete domains if they are no longer used
-	// for _, existingDomain := range currDomains.Items {
-	// 	found := false
-	// 	for _, desiredDomain := range desiredDomains {
-	// 		if desiredDomain.Name == existingDomain.Name {
-	// 			found = true
-	// 			break
-	// 		}
-	// 	}
-	// 	if !found {
-	// 		if err := c.Delete(ctx, &existingDomain); err != nil {
-	// 			return err
-	// 		}
-	// 	}
-	// }
+	// Don't delete domains to prevent accidentally de-registering them and making people re-do DNS
 
 	for _, desiredEdge := range desiredEdges {
 		found := false
 		for _, currEdge := range currEdges.Items {
 			if desiredEdge.Name == currEdge.Name {
 				// It matches so lets update it if anything is different
-				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
 					currEdge.Spec = desiredEdge.Spec
 					if err := c.Update(ctx, &currEdge); err != nil {
-						// TODO:(initial-store) This is failing (but eventually succeeding) on this call with this error
-						// Operation cannot be fulfilled on httpsedges.ingress.k8s.ngrok.com \"bezek-hello-world-ingress-ngrok-io\": the object has been modified; please apply your changes to the latest version and try again
 						d.log.Error(err, "error updating edge", "desiredEdge", desiredEdge, "currEdge", currEdge)
 						return err
 					}
@@ -241,7 +232,6 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		for _, currTunnel := range currTunnels.Items {
 			if desiredTunnel.Name == currTunnel.Name {
 				// It matches so lets update it if anything is different
-				// TODO:(initial-store) Might need to check if the owner reference changed either
 				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
 					currTunnel.Spec = desiredTunnel.Spec
 					if err := c.Update(ctx, &currTunnel); err != nil {
@@ -282,7 +272,6 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	return nil
 }
 
-// TODO:(initial-store) - set the SetOwnerReference
 func (d *Driver) calculateDomains() []ingressv1alpha1.Domain {
 	// make a map of string to domains
 	domainMap := make(map[string]ingressv1alpha1.Domain)
@@ -328,12 +317,6 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 		for _, ingress := range ingresses {
 			for _, rule := range ingress.Spec.Rules {
 				if rule.Host == domain.Spec.Domain {
-					edge.GetAnnotations()
-					err := controllerutil.SetOwnerReference(ingress, &edge, d.scheme)
-					if err != nil {
-						// TODO:(initial-store) handle this error
-						panic(err)
-					}
 					var matchType string
 					parsedRouteModules := annotations.NewAnnotationsExtractor().Extract(ingress)
 
@@ -374,7 +357,6 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 	return edges
 }
 
-// TODO:(initial-store) - set the SetOwnerReference
 func (d *Driver) calculateTunnels() []ingressv1alpha1.Tunnel {
 	// Tunnels should be unique on a service and port basis so if they are referenced more than once, we
 	// only create one tunnel per service and port.
