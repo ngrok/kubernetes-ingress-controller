@@ -42,18 +42,21 @@ func keyFunc(obj interface{}) (string, error) {
 
 // Storer is the interface that wraps the required methods to gather information
 // about ingresses, services, secrets and ingress annotations.
+// It exposes methods to list both all and filtered resources
 type Storer interface {
 	GetIngressClassV1(name string) (*netv1.IngressClass, error)
+	GetIngressV1(name, namespace string) (*netv1.Ingress, error)
+	GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error)
 
 	ListIngressClassesV1() []*netv1.IngressClass
 	ListNgrokIngressClassesV1() []*netv1.IngressClass
+
 	ListIngressesV1() []*netv1.Ingress
 	ListNgrokIngressesV1() []*netv1.Ingress
+
 	ListDomainsV1() []*ingressv1alpha1.Domain
 	ListTunnelsV1() []*ingressv1alpha1.Tunnel
-
-	GetIngressV1(name, namespace string) (*netv1.Ingress, error)
-	GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error)
+	ListHTTPSEdgesV1() []*ingressv1alpha1.HTTPSEdge
 }
 
 // Store implements Storer and can be used to list Ingress, Services
@@ -76,8 +79,9 @@ type CacheStores struct {
 	IngressClassV1 cache.Store
 
 	// Ngrok Stores
-	DomainV1 cache.Store
-	TunnelV1 cache.Store
+	DomainV1    cache.Store
+	TunnelV1    cache.Store
+	HTTPSEdgeV1 cache.Store
 
 	log logr.Logger
 	l   *sync.RWMutex
@@ -90,6 +94,7 @@ func NewCacheStores(logger logr.Logger) CacheStores {
 		IngressClassV1: cache.NewStore(keyFunc),
 		DomainV1:       cache.NewStore(keyFunc),
 		TunnelV1:       cache.NewStore(keyFunc),
+		HTTPSEdgeV1:    cache.NewStore(keyFunc),
 		l:              &sync.RWMutex{},
 		log:            logger,
 	}
@@ -125,9 +130,11 @@ func (c CacheStores) Get(obj runtime.Object) (item interface{}, exists bool, err
 		return c.DomainV1.Get(obj)
 	case *ingressv1alpha1.Tunnel:
 		return c.TunnelV1.Get(obj)
+	case *ingressv1alpha1.HTTPSEdge:
+		return c.HTTPSEdgeV1.Get(obj)
+	default:
+		return nil, false, fmt.Errorf("unsupported object type: %T", obj)
 	}
-
-	return nil, false, fmt.Errorf("unsupported object type: %T", obj)
 }
 
 // Add stores a provided runtime.Object into the CacheStore if it's of a supported type.
@@ -152,6 +159,9 @@ func (c CacheStores) Add(obj runtime.Object) error {
 		return c.DomainV1.Add(obj)
 	case *ingressv1alpha1.Tunnel:
 		return c.TunnelV1.Add(obj)
+	case *ingressv1alpha1.HTTPSEdge:
+		return c.HTTPSEdgeV1.Add(obj)
+
 	default:
 		return fmt.Errorf("unsupported object type: %T", obj)
 	}
@@ -178,6 +188,8 @@ func (c CacheStores) Delete(obj runtime.Object) error {
 		return c.DomainV1.Delete(obj)
 	case *ingressv1alpha1.Tunnel:
 		return c.TunnelV1.Delete(obj)
+	case *ingressv1alpha1.HTTPSEdge:
+		return c.HTTPSEdgeV1.Delete(obj)
 	default:
 		return fmt.Errorf("unsupported object type: %T", obj)
 	}
@@ -207,6 +219,7 @@ func (s Store) GetIngressV1(name, namespcae string) (*netv1.Ingress, error) {
 	return p.(*netv1.Ingress), nil
 }
 
+// GetNgrokIngressV1 looks up the Ingress resource by name and namespace and returns it if it's found
 func (s Store) GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error) {
 	ing, err := s.GetIngressV1(name, namespace)
 	if err != nil {
@@ -254,16 +267,6 @@ func (s Store) ListNgrokIngressClassesV1() []*netv1.IngressClass {
 	return filteredClasses
 }
 
-// ListNgrokClassNames returns a string slice of the names of each matching ingress class
-func (s Store) ListNgrokClassNames() []string {
-	classes := s.ListNgrokIngressClassesV1()
-	names := []string{}
-	for _, class := range classes {
-		names = append(names, class.Name)
-	}
-	return names
-}
-
 // ListIngressesV1 returns the list of Ingresses in the Ingress v1 store.
 func (s Store) ListIngressesV1() []*netv1.Ingress {
 	// filter ingress rules
@@ -298,6 +301,67 @@ func (s Store) ListNgrokIngressesV1() []*netv1.Ingress {
 		}
 	}
 	return ingresses
+}
+
+// ListDomainsV1 returns the list of Domains in the Domain v1 store.
+func (s Store) ListDomainsV1() []*ingressv1alpha1.Domain {
+	// filter ingress rules
+	var domains []*ingressv1alpha1.Domain
+	for _, item := range s.stores.DomainV1.List() {
+		domain, ok := item.(*ingressv1alpha1.Domain)
+		if !ok {
+			s.log.Info("listDomainsV1: dropping object of unexpected type: %#v", item)
+			continue
+		}
+		domains = append(domains, domain)
+	}
+
+	sort.SliceStable(domains, func(i, j int) bool {
+		return strings.Compare(fmt.Sprintf("%s/%s", domains[i].Namespace, domains[i].Name),
+			fmt.Sprintf("%s/%s", domains[j].Namespace, domains[j].Name)) < 0
+	})
+
+	return domains
+}
+
+// ListTunnelsV1 returns the list of Tunnels in the Tunnel v1 store.
+func (s Store) ListTunnelsV1() []*ingressv1alpha1.Tunnel {
+	var tunnels []*ingressv1alpha1.Tunnel
+	for _, item := range s.stores.TunnelV1.List() {
+		tunnel, ok := item.(*ingressv1alpha1.Tunnel)
+		if !ok {
+			s.log.Info("listTunnelsV1: dropping object of unexpected type: %#v", item)
+			continue
+		}
+		tunnels = append(tunnels, tunnel)
+	}
+
+	sort.SliceStable(tunnels, func(i, j int) bool {
+		return strings.Compare(fmt.Sprintf("%s/%s", tunnels[i].Namespace, tunnels[i].Name),
+			fmt.Sprintf("%s/%s", tunnels[j].Namespace, tunnels[j].Name)) < 0
+	})
+
+	return tunnels
+}
+
+// ListHTTPSEdgesV1 returns the list of HTTPSEdges in the HTTPSEdge v1 store.
+func (s Store) ListHTTPSEdgesV1() []*ingressv1alpha1.HTTPSEdge {
+	var edges []*ingressv1alpha1.HTTPSEdge
+	for _, item := range s.stores.HTTPSEdgeV1.List() {
+		edge, ok := item.(*ingressv1alpha1.HTTPSEdge)
+		if !ok {
+			s.log.Info("listHTTPSEdgesV1: dropping object of unexpected type: %#v", item)
+			continue
+		}
+		edges = append(edges, edge)
+	}
+
+	sort.SliceStable(edges, func(i, j int) bool {
+		return strings.Compare(fmt.Sprintf("%s/%s", edges[i].Namespace, edges[i].Name),
+			fmt.Sprintf("%s/%s", edges[j].Namespace, edges[j].Name)) < 0
+	})
+
+	return edges
 }
 
 func (s Store) shouldHandleIngress(ing *netv1.Ingress) (bool, error) {
@@ -348,45 +412,4 @@ func (s Store) shouldHandleIngressIsValid(ing *netv1.Ingress) (bool, error) {
 		return false, errs
 	}
 	return true, nil
-}
-
-// ListDomainsV1 returns the list of Domains in the Domain v1 store.
-func (s Store) ListDomainsV1() []*ingressv1alpha1.Domain {
-	// filter ingress rules
-	var domains []*ingressv1alpha1.Domain
-	for _, item := range s.stores.DomainV1.List() {
-		domain, ok := item.(*ingressv1alpha1.Domain)
-		if !ok {
-			s.log.Info("listDomainsV1: dropping object of unexpected type: %#v", item)
-			continue
-		}
-		domains = append(domains, domain)
-	}
-
-	sort.SliceStable(domains, func(i, j int) bool {
-		return strings.Compare(fmt.Sprintf("%s/%s", domains[i].Namespace, domains[i].Name),
-			fmt.Sprintf("%s/%s", domains[j].Namespace, domains[j].Name)) < 0
-	})
-
-	return domains
-}
-
-// ListTunnelsV1 returns the list of Tunnels in the Tunnel v1 store.
-func (s Store) ListTunnelsV1() []*ingressv1alpha1.Tunnel {
-	var tunnels []*ingressv1alpha1.Tunnel
-	for _, item := range s.stores.TunnelV1.List() {
-		tunnel, ok := item.(*ingressv1alpha1.Tunnel)
-		if !ok {
-			s.log.Info("listTunnelsV1: dropping object of unexpected type: %#v", item)
-			continue
-		}
-		tunnels = append(tunnels, tunnel)
-	}
-
-	sort.SliceStable(tunnels, func(i, j int) bool {
-		return strings.Compare(fmt.Sprintf("%s/%s", tunnels[i].Namespace, tunnels[i].Name),
-			fmt.Sprintf("%s/%s", tunnels[j].Namespace, tunnels[j].Name)) < 0
-	})
-
-	return tunnels
 }

@@ -23,7 +23,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -41,14 +40,21 @@ type IngressReconciler struct {
 }
 
 // Create a new controller using our reconciler and set it up with the manager
-func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Driver) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.Ingress{}).
-		Owns(&ingressv1alpha1.HTTPSEdge{}).
-		Owns(&ingressv1alpha1.Tunnel{}).
+		// TODO:(initial-store): Watch ingress classes and create a basic function to find all ings for thats class
 		Watches(
 			&source.Kind{Type: &ingressv1alpha1.Domain{}},
-			handler.EnqueueRequestsFromMapFunc(irec.listIngressesForDomain),
+			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
+		).
+		Watches(
+			&source.Kind{Type: &ingressv1alpha1.HTTPSEdge{}},
+			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
+		).
+		Watches(
+			&source.Kind{Type: &ingressv1alpha1.Tunnel{}},
+			store.NewEnqueueOwnersAfterSyncing(d, mgr.GetClient()),
 		).
 		Complete(irec)
 }
@@ -408,6 +414,7 @@ func (irec *IngressReconciler) listIngressesForDomain(obj client.Object) []recon
 		return []reconcile.Request{}
 	}
 
+	// TODO:(initial-store) Make a store function to list all ingresses that have a specific domain
 	ingresses := irec.Driver.Store.ListNgrokIngressesV1()
 	recs := []reconcile.Request{}
 
@@ -429,6 +436,17 @@ func (irec *IngressReconciler) listIngressesForDomain(obj client.Object) []recon
 	return recs
 }
 
+// TODO:(initial-store) This is a duplicate of whats in the driver and should migrate eventually
+// Generates a labels map for matching ngrok Routes to Agent Tunnels
+func backendToLabelMap(backend netv1.IngressBackend, namespace string) map[string]string {
+	return map[string]string{
+		"k8s.ngrok.com/namespace": namespace,
+		"k8s.ngrok.com/service":   backend.Service.Name,
+		"k8s.ngrok.com/port":      strconv.Itoa(int(backend.Service.Port.Number)),
+	}
+}
+
+// TODO:(initial-store) This is a duplicate of whats in the driver and should migrate eventually
 func ingressToTunnels(ingress *netv1.Ingress) []ingressv1alpha1.Tunnel {
 	tunnels := make([]ingressv1alpha1.Tunnel, 0)
 
@@ -447,7 +465,7 @@ func ingressToTunnels(ingress *netv1.Ingress) []ingressv1alpha1.Tunnel {
 		for _, path := range rule.HTTP.Paths {
 			serviceName := path.Backend.Service.Name
 			servicePort := path.Backend.Service.Port.Number
-			tunnelAddr := fmt.Sprintf("%s.%s.%s:%d", serviceName, ingress.Namespace, clusterDomain, servicePort)
+			tunnelAddr := fmt.Sprintf("%s.%s.%s:%d", serviceName, ingress.Namespace, "svc.cluster.local", servicePort)
 			tunnelName := fmt.Sprintf("%s-%d", serviceName, servicePort)
 
 			tunnelMap[tunnelName] = ingressv1alpha1.Tunnel{
@@ -468,13 +486,4 @@ func ingressToTunnels(ingress *netv1.Ingress) []ingressv1alpha1.Tunnel {
 	}
 
 	return tunnels
-}
-
-// Generates a labels map for matching ngrok Routes to Agent Tunnels
-func backendToLabelMap(backend netv1.IngressBackend, namespace string) map[string]string {
-	return map[string]string{
-		"k8s.ngrok.com/namespace": namespace,
-		"k8s.ngrok.com/service":   backend.Service.Name,
-		"k8s.ngrok.com/port":      strconv.Itoa(int(backend.Service.Port.Number)),
-	}
 }

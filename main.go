@@ -160,7 +160,7 @@ func runController(ctx context.Context, opts managerOpts) error {
 		Namespace:            opts.namespace,
 		AnnotationsExtractor: annotations.NewAnnotationsExtractor(),
 		Driver:               driver,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, driver); err != nil {
 		return fmt.Errorf("unable to create ingress controller: %w", err)
 	}
 
