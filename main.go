@@ -250,7 +250,6 @@ func getDriver(ctx context.Context, mgr manager.Manager) (*store.Driver, error) 
 
 	ings := d.Store.ListNgrokIngressesV1()
 	for _, ing := range ings {
-		// TODO:(initial-store) These may be overkill or could be moved to debug level.
 		setupLog.Info("found matching ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
 	}
 

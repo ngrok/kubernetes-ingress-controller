@@ -1,6 +1,11 @@
 package errors
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	netv1 "k8s.io/api/networking/v1"
+)
 
 // Not all domains are reconciled yet and have a domain in their status
 type NotAllDomainsReadyYetError struct{}
@@ -42,8 +47,20 @@ type ErrDifferentIngressClass struct {
 	message string
 }
 
-func NewErrDifferentIngressClass(ourIngressClasses []string, foundIngressClass string) ErrDifferentIngressClass {
-	return ErrDifferentIngressClass{message: fmt.Sprintf("different ingress class, our ingress classes: %s, found ingress class: %s", ourIngressClasses, foundIngressClass)}
+func NewErrDifferentIngressClass(ourIngressClasses []*netv1.IngressClass, foundIngressClass *string) ErrDifferentIngressClass {
+	msg := []string{"The ingress object is not valid for this controllers ingress class configuration."}
+	if foundIngressClass == nil {
+		msg = append(msg, "The ingress object does not have an ingress class set.")
+	} else {
+		msg = append(msg, fmt.Sprintf("The ingress object has an ingress class set to %s.", *foundIngressClass))
+	}
+	for _, ingressClass := range ourIngressClasses {
+		if ingressClass.Annotations["ingressclass.kubernetes.io/is-default-class"] == "true" {
+			msg = append(msg, fmt.Sprintf("This controller is the default ingress controller ingress class %s.", ingressClass.Name))
+		}
+		msg = append(msg, fmt.Sprintf("This controller is watching for the class %s", ingressClass.Name))
+	}
+	return ErrDifferentIngressClass{message: strings.Join(msg, "\n")}
 }
 
 func (e ErrDifferentIngressClass) Error() string {
@@ -55,5 +72,30 @@ func (e ErrDifferentIngressClass) Error() string {
 
 func IsErrDifferentIngressClass(err error) bool {
 	_, ok := err.(ErrDifferentIngressClass)
+	return ok
+}
+
+type ErrInvalidIngressSpec struct {
+	errors []string
+}
+
+func NewErrInvalidIngressSpec() ErrInvalidIngressSpec {
+	return ErrInvalidIngressSpec{}
+}
+
+func (e ErrInvalidIngressSpec) AddError(err string) {
+	e.errors = append(e.errors, err)
+}
+
+func (e ErrInvalidIngressSpec) HasErrors() bool {
+	return len(e.errors) > 0
+}
+
+func (e ErrInvalidIngressSpec) Error() string {
+	return fmt.Sprintf("invalid ingress spec: %s", e.errors)
+}
+
+func IsErrInvalidIngressSpec(err error) bool {
+	_, ok := err.(ErrInvalidIngressSpec)
 	return ok
 }

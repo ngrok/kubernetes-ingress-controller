@@ -212,10 +212,9 @@ func (s Store) GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error)
 	if err != nil {
 		return nil, err
 	}
-	if !s.shouldHandleIngress(ing) {
-		ngrokClasses := s.ListNgrokClassNames()
-
-		return nil, errors.NewErrDifferentIngressClass(ngrokClasses, *ing.Spec.IngressClassName)
+	ok, err := s.shouldHandleIngress(ing)
+	if !ok || err != nil {
+		return nil, err
 	}
 
 	return ing, nil
@@ -293,58 +292,62 @@ func (s Store) ListNgrokIngressesV1() []*netv1.Ingress {
 
 	var ingresses []*netv1.Ingress
 	for _, ing := range ings {
-		if s.shouldHandleIngress(ing) {
+		ok, err := s.shouldHandleIngress(ing)
+		if ok && err == nil {
 			ingresses = append(ingresses, ing)
 		}
 	}
 	return ingresses
 }
 
-func (s Store) shouldHandleIngress(ing *netv1.Ingress) bool {
-	return s.shouldHandleIngressCheckClass(ing) && s.shouldHandleIngressIsValid(ing)
+func (s Store) shouldHandleIngress(ing *netv1.Ingress) (bool, error) {
+	ok, err := s.shouldHandleIngressIsValid(ing)
+	if err != nil {
+		return ok, err
+	}
+	return s.shouldHandleIngressCheckClass(ing)
 }
 
 // shouldHandleIngressCheckClass checks if the ingress should be handled by the controller based on the ingress class
-func (s Store) shouldHandleIngressCheckClass(ing *netv1.Ingress) bool {
+func (s Store) shouldHandleIngressCheckClass(ing *netv1.Ingress) (bool, error) {
 	ngrokClasses := s.ListNgrokIngressClassesV1()
 	if ing.Spec.IngressClassName != nil {
 		for _, class := range ngrokClasses {
 			if *ing.Spec.IngressClassName == class.Name {
-				return true
+				return true, nil
 			}
 		}
 	} else {
 		for _, class := range ngrokClasses {
-			if class.ObjectMeta.Annotations["ingressclass.kubernetes.io/is-default-class"] == "true" {
-				return true
+			if class.Annotations["ingressclass.kubernetes.io/is-default-class"] == "true" {
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, errors.NewErrDifferentIngressClass(s.ListNgrokIngressClassesV1(), ing.Spec.IngressClassName)
 }
 
 // shouldHandleIngressIsValid checks if the ingress should be handled by the controller based on the ingress spec
-func (s Store) shouldHandleIngressIsValid(ing *netv1.Ingress) bool {
-	var err error
+func (s Store) shouldHandleIngressIsValid(ing *netv1.Ingress) (bool, error) {
+	errs := errors.NewErrInvalidIngressSpec()
 	if len(ing.Spec.Rules) > 1 {
-		err = fmt.Errorf("A maximum of one rule is required to be set")
+		errs.AddError(fmt.Sprintf("A maximum of one rule is required to be set"))
 	}
 	if len(ing.Spec.Rules) == 0 {
-		err = fmt.Errorf("At least one rule is required to be set")
+		errs.AddError(fmt.Sprintf("At least one rule is required to be set"))
 	}
 	if ing.Spec.Rules[0].Host == "" {
-		err = fmt.Errorf("A host is required to be set")
+		errs.AddError(fmt.Sprintf("A host is required to be set"))
 	}
 	for _, path := range ing.Spec.Rules[0].HTTP.Paths {
 		if path.Backend.Resource != nil {
-			err = fmt.Errorf("Resource backends are not supported")
+			errs.AddError(fmt.Sprintf("Resource backends are not supported"))
 		}
 	}
-	if err != nil {
-		s.log.Error(err, "Ingress is invalid")
-		return false
+	if errs.HasErrors() {
+		return false, errs
 	}
-	return true
+	return true, nil
 }
 
 // ListDomainsV1 returns the list of Domains in the Domain v1 store.

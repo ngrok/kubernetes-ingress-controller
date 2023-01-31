@@ -75,40 +75,36 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ctx = ctrl.LoggerInto(ctx, log)
 	ingress := &netv1.Ingress{}
 	err := irec.Client.Get(ctx, req.NamespacedName, ingress)
-	// If the ingress doesn't exist, delete it from the store and be done
-	if client.IgnoreNotFound(err) != nil {
-		// TODO:(initial-store) remove this once i verify it works this way
-		log.Error(err, "In the reconcile loop, failed to get ingress which must mean a delete event occurred somehow even though we filter")
-		err := irec.Driver.DeleteIngress(req.NamespacedName)
-		if err != nil {
-			log.Error(err, "Failed to delete ingress from store")
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
 	if err != nil {
-		log.Error(err, "Failed to get ingress")
-		return ctrl.Result{}, err
+		// If it is a NotFound Error
+		if client.IgnoreNotFound(err) == nil {
+			// TODO:(initial-store) remove this once i verify it works this way
+			log.Error(err, "In the reconcile loop, failed to get ingress which must mean a delete event occurred somehow even though we filter")
+			return ctrl.Result{}, irec.Driver.DeleteIngress(req.NamespacedName)
+		}
+		return ctrl.Result{}, err // Otherwise, its a real error
 	}
 
-	// add the ingress object to the store
+	// Ensure the ingress object is up to date in the store
 	err = irec.Driver.Update(ingress)
 	if err != nil {
-		log.Error(err, "Failed to add ingress to store")
 		return ctrl.Result{}, err
 	}
 
+	// Even though we already have the ingress object, leverage the store to ensure this works off the same data as everything else
 	ingress, err = irec.Driver.Store.GetNgrokIngressV1(ingress.Name, ingress.Namespace)
 	if internalerrors.IsErrDifferentIngressClass(err) {
 		log.Info("Ingress is not of type ngrok so skipping it")
+		return ctrl.Result{}, nil
+	}
+	if internalerrors.IsErrInvalidIngressSpec(err) {
+		log.Info("Ingress is not valid so skipping it")
 		return ctrl.Result{}, nil
 	}
 	if err != nil {
 		log.Error(err, "Failed to get ingress from store")
 		return ctrl.Result{}, err
 	}
-	log.Info("Got ingress from store", "ingress", ingress)
 
 	if ingress.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The object is not being deleted, so register and sync finalizer
@@ -131,22 +127,11 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 
 			// Remove the ingress object from the store
-			err := irec.Driver.DeleteIngress(req.NamespacedName)
-			if err != nil {
-				log.Error(err, "Failed to delete ingress from store")
-				return ctrl.Result{}, err
-			}
+			return ctrl.Result{}, irec.Driver.DeleteIngress(req.NamespacedName)
 		}
 
 		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
-	}
-
-	// Otherwise, update everything
-	err = irec.Driver.Update(ingress)
-	if err != nil {
-		log.Error(err, "Failed to add ingress to store")
-		return ctrl.Result{}, err
 	}
 
 	return irec.reconcileAll(ctx, ingress)
@@ -160,7 +145,15 @@ func (irec *IngressReconciler) DeleteDependents(ctx context.Context, ingress *ne
 }
 
 func (irec *IngressReconciler) reconcileAll(ctx context.Context, ingress *netv1.Ingress) (reconcile.Result, error) {
-	err := irec.reconcileDomains(ctx, ingress)
+	log := irec.Log
+	// First Update the store
+	err := irec.Driver.Update(ingress)
+	if err != nil {
+		log.Error(err, "Failed to add ingress to store")
+		return ctrl.Result{}, err
+	}
+
+	err = irec.reconcileDomains(ctx, ingress)
 	if err != nil {
 		if internalerrors.IsNotAllDomainsReadyYet(err) {
 			irec.Recorder.Event(ingress, v1.EventTypeNormal, "Provisioning domains", "Waiting for domains to be ready")
@@ -303,7 +296,7 @@ func (irec *IngressReconciler) reconcileDomains(ctx context.Context, ingress *ne
 				return err
 			}
 
-			irec.Log.Info("Creating domain", "namespace", reservedDomain.Namespace, "name", reservedDomain.Name)
+			ctrl.LoggerFrom(ctx).Info("Creating domain", "namespace", reservedDomain.Namespace, "name", reservedDomain.Name)
 			err = irec.Create(ctx, &reservedDomain)
 			if err != nil {
 				return err
@@ -336,7 +329,7 @@ func (irec *IngressReconciler) reconcileDomains(ctx context.Context, ingress *ne
 		return internalerrors.NewNotAllDomainsReadyYetError()
 	}
 
-	irec.Log.Info("Updating Ingress status with load balancer ingress statuses")
+	ctrl.LoggerFrom(ctx).Info("Updating Ingress status with load balancer ingress statuses")
 	ingress.Status.LoadBalancer.Ingress = loadBalancerIngressStatuses
 	return irec.Status().Update(ctx, ingress)
 }
