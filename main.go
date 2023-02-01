@@ -246,17 +246,17 @@ func getDriver(ctx context.Context, mgr manager.Manager) (*store.Driver, error) 
 		return nil, fmt.Errorf("unable to seed cache store: %w", err)
 	}
 
-	ings := d.Store.ListNgrokIngressesV1()
+	ings := d.ListNgrokIngressesV1()
 	for _, ing := range ings {
 		setupLog.Info("found matching ingress", "ingress-name", ing.Name, "ingress-namespace", ing.Namespace)
 	}
 
 	// Helpful debug information if someone doesn't have their ingress class set up correctly.
 	if len(ings) == 0 {
-		ingresses := d.Store.ListIngressesV1()
-		ngrokIngresses := d.Store.ListNgrokIngressesV1()
-		ingressClasses := d.Store.ListIngressClassesV1()
-		ngrokIngressClasses := d.Store.ListNgrokIngressClassesV1()
+		ingresses := d.ListIngressesV1()
+		ngrokIngresses := d.ListNgrokIngressesV1()
+		ingressClasses := d.ListIngressClassesV1()
+		ngrokIngressClasses := d.ListNgrokIngressClassesV1()
 		setupLog.Info("no matching ingresses found",
 			"all ingresses", ingresses,
 			"all ngrok ingresses", ngrokIngresses,

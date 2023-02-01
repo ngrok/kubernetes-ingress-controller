@@ -26,6 +26,7 @@ import (
 	"github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 
 	netv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/go-logr/logr"
 )
@@ -41,6 +42,11 @@ func keyFunc(obj interface{}) (string, error) {
 // about ingresses, services, secrets and ingress annotations.
 // It exposes methods to list both all and filtered resources
 type Storer interface {
+	Get(obj runtime.Object) (item interface{}, exists bool, err error)
+	Add(runtime.Object) error
+	Update(runtime.Object) error
+	Delete(runtime.Object) error
+
 	GetIngressClassV1(name string) (*netv1.IngressClass, error)
 	GetIngressV1(name, namespace string) (*netv1.Ingress, error)
 	GetNgrokIngressV1(name, namespace string) (*netv1.Ingress, error)
@@ -75,6 +81,27 @@ func New(cs CacheStores, controllerName string, logger logr.Logger) Storer {
 		controllerName: controllerName,
 		log:            logger,
 	}
+}
+
+// Get proxies the call to the underlying store.
+func (s Store) Get(obj runtime.Object) (interface{}, bool, error) {
+	return s.stores.Get(obj)
+}
+
+// Add proxies the call to the underlying store.
+func (s Store) Add(obj runtime.Object) error {
+	return s.stores.Add(obj.DeepCopyObject())
+}
+
+// Update proxies the call to the underlying store.
+// An add for an object with the same key thats already present is just an update
+func (s Store) Update(obj runtime.Object) error {
+	return s.stores.Add(obj.DeepCopyObject())
+}
+
+// Delete proxies the call to the underlying store.
+func (s Store) Delete(obj runtime.Object) error {
+	return s.stores.Delete(obj)
 }
 
 // GetIngressClassV1 returns the 'name' IngressClass resource.

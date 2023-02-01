@@ -88,7 +88,7 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Even though we already have the ingress object, leverage the store to ensure this works off the same data as everything else
-	ingress, err = irec.Driver.Store.GetNgrokIngressV1(ingress.Name, ingress.Namespace)
+	ingress, err = irec.Driver.GetNgrokIngressV1(ingress.Name, ingress.Namespace)
 	if internalerrors.IsErrDifferentIngressClass(err) {
 		log.Info("Ingress is not of type ngrok so skipping it")
 		return ctrl.Result{}, nil

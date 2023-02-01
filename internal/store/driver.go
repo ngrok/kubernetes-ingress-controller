@@ -21,13 +21,14 @@ import (
 )
 
 // The name of the ingress controller which is uses to match on ingress classes
-const controllerName = "k8s.ngrok.com/ingress-controller" // TODO:Let the user configure this
+const controllerName = "k8s.ngrok.com/ingress-controller" // TODO: Let the user configure this
 const clusterDomain = "svc.cluster.local"                 // TODO: We can technically figure this out by looking at things like our resolv.conf or we can just take this as a helm option
 
 // Driver maintains the store of information, can derive new information from the store, and can
 // synchronize the desired state of the store to the actual state of the cluster.
 type Driver struct {
-	Store          Storer // TODO:(initial-store) This should be private
+	Storer // TODO:(initial-store) This should be private
+
 	cacheStores    CacheStores
 	log            logr.Logger
 	scheme         *runtime.Scheme
@@ -39,7 +40,7 @@ func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 	cacheStores := NewCacheStores(logger)
 	s := New(cacheStores, controllerName, logger)
 	return &Driver{
-		Store:       s,
+		Storer:      s,
 		cacheStores: cacheStores,
 		log:         logger,
 		scheme:      scheme,
@@ -98,11 +99,6 @@ func (d *Driver) Seed(ctx context.Context, c client.Reader) error {
 	return nil
 }
 
-// Delete is a simple proxy to the cacheStores Delete method
-func (d *Driver) Delete(obj runtime.Object) error {
-	return d.cacheStores.Delete(obj)
-}
-
 // Delete an ingress object given the NamespacedName
 // Takes a namespacedName string as a parameter and
 // deletes the ingress object from the cacheStores map
@@ -112,14 +108,6 @@ func (d *Driver) DeleteIngress(n types.NamespacedName) error {
 	ingress.SetNamespace(n.Namespace)
 	ingress.SetName(n.Name)
 	return d.cacheStores.Delete(ingress)
-}
-
-// Update is a simple proxy to the cacheStores Add method
-// An add for an object with the same key thats already present is just an update
-func (d *Driver) Update(obj runtime.Object) error {
-	// we do a deep copy of the object here so that the caller can continue to use
-	// the original object in a threadsafe manner.
-	return d.cacheStores.Add(obj.DeepCopyObject())
 }
 
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
@@ -275,7 +263,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 func (d *Driver) calculateDomains() []ingressv1alpha1.Domain {
 	// make a map of string to domains
 	domainMap := make(map[string]ingressv1alpha1.Domain)
-	ingresses := d.Store.ListNgrokIngressesV1()
+	ingresses := d.ListNgrokIngressesV1()
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Spec.Rules {
 			if rule.Host == "" {
@@ -301,7 +289,7 @@ func (d *Driver) calculateDomains() []ingressv1alpha1.Domain {
 
 func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 	domains := d.calculateDomains()
-	ingresses := d.Store.ListNgrokIngressesV1()
+	ingresses := d.ListNgrokIngressesV1()
 	edges := make([]ingressv1alpha1.HTTPSEdge, 0, len(domains))
 	for _, domain := range domains {
 		edge := ingressv1alpha1.HTTPSEdge{
@@ -366,7 +354,7 @@ func (d *Driver) calculateTunnels() []ingressv1alpha1.Tunnel {
 	// Tunnels should be unique on a service and port basis so if they are referenced more than once, we
 	// only create one tunnel per service and port.
 	tunnelMap := make(map[string]ingressv1alpha1.Tunnel)
-	ingresses := d.Store.ListNgrokIngressesV1()
+	ingresses := d.ListNgrokIngressesV1()
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Spec.Rules {
 			if rule.Host == "" {

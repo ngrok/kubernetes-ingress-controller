@@ -44,12 +44,12 @@ func TestDriver(t *testing.T) {
 		}
 	}
 
-	foundIngs := d.Store.ListIngressesV1()
+	foundIngs := d.ListIngressesV1()
 	if len(foundIngs) != 6 {
 		t.Errorf("expected 6 ingresses, got %d", len(foundIngs))
 	}
 
-	i1CP, err := d.Store.GetIngressV1("test1", "test")
+	i1CP, err := d.GetIngressV1("test1", "test")
 	if err != nil {
 		fmt.Printf("err: %v", err)
 		t.Errorf("expected ingress to be found")
@@ -62,7 +62,7 @@ func TestDriver(t *testing.T) {
 	if i1CP.Name != "test1" {
 		t.Errorf("expected ingress name to be test1, got %s", i1CP.Name)
 	}
-	i2CP, err := d.Store.GetIngressV1("test2", "test")
+	i2CP, err := d.GetIngressV1("test2", "test")
 	if err != nil {
 		t.Errorf("expected ingress to be found")
 		return
@@ -169,15 +169,15 @@ func TestIngressClass(t *testing.T) {
 			d.Update(&iNotMatching)
 			d.Update(&iNoClass)
 
-			foundIngs := d.Store.ListNgrokIngressesV1()
+			foundIngs := d.ListNgrokIngressesV1()
 			if len(foundIngs) != scenario.expectedIngresses {
-				ings := d.Store.ListIngressesV1()
-				ngrokIngs := d.Store.ListNgrokIngressesV1()
-				ingClasses := d.Store.ListIngressClassesV1()
-				ngrokIngClasses := d.Store.ListNgrokIngressClassesV1()
+				ings := d.ListIngressesV1()
+				ngrokIngs := d.ListNgrokIngressesV1()
+				ingClasses := d.ListIngressClassesV1()
+				ngrokIngClasses := d.ListNgrokIngressClassesV1()
 
 				t.Errorf("Found: ings: %+v \n ngrokIngs: %+v \n ingClasses: %+v \n ngrokIngClasses: %+v", ings, ngrokIngs, ingClasses, ngrokIngClasses)
-				// t.Errorf("expected %d ingresses, got %d \nThe store had these ingresses %+v\n", scenario.expectedIngresses, len(foundIngs), d.Store.ListIngressesV1())
+				// t.Errorf("expected %d ingresses, got %d \nThe store had these ingresses %+v\n", scenario.expectedIngresses, len(foundIngs), d.ListIngressesV1())
 			}
 		})
 	}
