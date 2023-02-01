@@ -91,6 +91,7 @@ func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 
 // GetIngressV1 returns the 'name' Ingress resource.
 func (s Store) GetIngressV1(name, namespcae string) (*netv1.Ingress, error) {
+	// TODO:(initial-store) key forming should be in its own function
 	p, exists, err := s.stores.IngressV1.GetByKey(fmt.Sprintf("%v/%v", namespcae, name))
 	if err != nil {
 		return nil, err

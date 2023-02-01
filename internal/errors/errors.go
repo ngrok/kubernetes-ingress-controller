@@ -26,27 +26,34 @@ func IsNotAllDomainsReadyYet(err error) bool {
 	return ok
 }
 
+// ErrNotFoundInStore is meant to be used when an object is not found in the store so
+// that the caller can decide what to do with it.
 type ErrNotFoundInStore struct {
 	message string
 }
 
+// NewErrorNotFound returns a new ErrNotFoundInStore
 func NewErrorNotFound(message string) ErrNotFoundInStore {
 	return ErrNotFoundInStore{message: message}
 }
 
+// Error: Stringer: returns the error message
 func (e ErrNotFoundInStore) Error() string {
 	return e.message
 }
 
+// IsErrorNotFound: Reflect: returns true if the error is a ErrNotFoundInStore
 func IsErrorNotFound(err error) bool {
 	_, ok := err.(ErrNotFoundInStore)
 	return ok
 }
 
+// ErrInvalidIngressClass is meant to be used when an ingress object has an invalid ingress class
 type ErrDifferentIngressClass struct {
 	message string
 }
 
+// NewErrDifferentIngressClass returns a new ErrDifferentIngressClass
 func NewErrDifferentIngressClass(ourIngressClasses []*netv1.IngressClass, foundIngressClass *string) ErrDifferentIngressClass {
 	msg := []string{"The ingress object is not valid for this controllers ingress class configuration."}
 	if foundIngressClass == nil {
@@ -63,6 +70,7 @@ func NewErrDifferentIngressClass(ourIngressClasses []*netv1.IngressClass, foundI
 	return ErrDifferentIngressClass{message: strings.Join(msg, "\n")}
 }
 
+// Error: Stringer: returns the error message
 func (e ErrDifferentIngressClass) Error() string {
 	if e.message == "" {
 		return "different ingress class"
@@ -70,31 +78,38 @@ func (e ErrDifferentIngressClass) Error() string {
 	return e.message
 }
 
+// IsErrDifferentIngressClass: Reflect: returns true if the error is a ErrDifferentIngressClass
 func IsErrDifferentIngressClass(err error) bool {
 	_, ok := err.(ErrDifferentIngressClass)
 	return ok
 }
 
+// ErrInvalidIngressSpec is meant to be used when an ingress object has an invalid spec
 type ErrInvalidIngressSpec struct {
 	errors []string
 }
 
+// NewErrInvalidIngressSpec returns a new ErrInvalidIngressSpec
 func NewErrInvalidIngressSpec() ErrInvalidIngressSpec {
 	return ErrInvalidIngressSpec{}
 }
 
+// AddError adds an error to the list of errors
 func (e ErrInvalidIngressSpec) AddError(err string) {
 	e.errors = append(e.errors, err)
 }
 
+// HasErrors returns true if there are errors
 func (e ErrInvalidIngressSpec) HasErrors() bool {
 	return len(e.errors) > 0
 }
 
+// Error: Stringer: returns the error message
 func (e ErrInvalidIngressSpec) Error() string {
 	return fmt.Sprintf("invalid ingress spec: %s", e.errors)
 }
 
+// IsErrInvalidIngressSpec: Reflect: returns true if the error is a ErrInvalidIngressSpec
 func IsErrInvalidIngressSpec(err error) bool {
 	_, ok := err.(ErrInvalidIngressSpec)
 	return ok
