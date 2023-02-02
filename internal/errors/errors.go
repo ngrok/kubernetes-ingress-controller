@@ -55,7 +55,7 @@ type ErrDifferentIngressClass struct {
 
 // NewErrDifferentIngressClass returns a new ErrDifferentIngressClass
 func NewErrDifferentIngressClass(ourIngressClasses []*netv1.IngressClass, foundIngressClass *string) ErrDifferentIngressClass {
-	msg := []string{"The ingress object is not valid for this controllers ingress class configuration."}
+	msg := []string{"The controller will not reconcile this ingress object due to the ingress class mismatching."}
 	if foundIngressClass == nil {
 		msg = append(msg, "The ingress object does not have an ingress class set.")
 	} else {
@@ -66,6 +66,9 @@ func NewErrDifferentIngressClass(ourIngressClasses []*netv1.IngressClass, foundI
 			msg = append(msg, fmt.Sprintf("This controller is the default ingress controller ingress class %s.", ingressClass.Name))
 		}
 		msg = append(msg, fmt.Sprintf("This controller is watching for the class %s", ingressClass.Name))
+	}
+	if len(ourIngressClasses) == 0 {
+		msg = append(msg, "There are no ngrok ingress classes registered in the cluster.")
 	}
 	return ErrDifferentIngressClass{message: strings.Join(msg, "\n")}
 }

@@ -18,6 +18,7 @@ package store
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/go-logr/logr"
@@ -47,13 +48,29 @@ type CacheStores struct {
 func NewCacheStores(logger logr.Logger) CacheStores {
 	return CacheStores{
 		IngressV1:      cache.NewStore(keyFunc),
-		IngressClassV1: cache.NewStore(keyFunc),
+		IngressClassV1: cache.NewStore(clusterResourceKeyFunc),
 		DomainV1:       cache.NewStore(keyFunc),
 		TunnelV1:       cache.NewStore(keyFunc),
 		HTTPSEdgeV1:    cache.NewStore(keyFunc),
 		l:              &sync.RWMutex{},
 		log:            logger,
 	}
+}
+
+func keyFunc(obj interface{}) (string, error) {
+	v := reflect.Indirect(reflect.ValueOf(obj))
+	name := v.FieldByName("Name")
+	namespace := v.FieldByName("Namespace")
+	return namespace.String() + "/" + name.String(), nil
+}
+
+func getKey(name, namespace string) string {
+	return namespace + "/" + name
+}
+
+func clusterResourceKeyFunc(obj interface{}) (string, error) {
+	v := reflect.Indirect(reflect.ValueOf(obj))
+	return v.FieldByName("Name").String(), nil
 }
 
 // Get checks whether or not there's already some version of the provided object present in the cache.

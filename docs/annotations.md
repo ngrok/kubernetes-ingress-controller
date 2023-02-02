@@ -11,7 +11,7 @@ based on the `spec.rules` defined in the Ingress resource. It will then configur
 - [IP Restriction](#ip-restriction)
 - [TLS Termination](#tls-termination)
   - [Setting Minimum TLS Version](#setting-minimum-tls-version)
-
+- [Webhook Verification](#webhook-verification)
 
 ## Compression
 
@@ -79,7 +79,7 @@ metadata:
 
 ## IP Restriction
 
-The `k8s.ngrok.com/ip-policy-ids` annotation can be used to restrict access to all routes defined in the Ingress resource to a list of IP Policies. The annotation accepts a comma-separated list of IP Policy IDs. If not specified(default), the `IP Restriction` module will be disabled in ngrok for any Edge HTTPS Routes the annotation applies to.
+The `k8s.ngrok.com/ip-policies` annotation can be used to restrict access to all routes defined in the Ingress resource to a list of IP Policies. The annotation accepts a comma-separated list of IP Policies by either IP Policy ID or the name of an `ippolicies.ingress.k8s.ngrok.com` resource. If not specified(default), the `IP Restriction` module will be disabled in ngrok for any Edge HTTPS Routes the annotation applies to.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -87,10 +87,11 @@ kind: Ingress
 metadata:
   name: minimal-ingress
   annotations:
-    k8s.ngrok.com/ip-policy-ids: "ipp_ABC123tV8hrTPdf0Q0lS4KC,ipp_ABCD123V8hrTPdf0Q0lS4"
+    k8s.ngrok.com/ip-policies: "ipp_ABC123tV8hrTPdf0Q0lS4KC,my-policy"
 spec:
   ...
 ```
+
 
 ## TLS Termination
 
@@ -106,6 +107,27 @@ metadata:
   name: minimal-ingress
   annotations:
     k8s.ngrok.com/tls-min-version: "1.3"
+spec:
+  ...
+```
+
+## Webhook Verification
+
+The following annotations can be used to configure the [Webhook Verification module](https://ngrok.com/docs/cloud-edge/modules/webhook).
+
+* `k8s.ngrok.com/webhook-verification-provider` - The webhook provider to use.
+* `k8s.ngrok.com/webhook-verification-secret-name` - The name of the Kubernetes Secret that contains the webhook secret.
+* `k8s.ngrok.com/webhook-verification-secret-key` - The key in the Kubernetes Secret that contains the webhook secret.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minimal-ingress
+  annotations:
+    k8s.ngrok.com/webhook-verification-provider: "github"
+    k8s.ngrok.com/webhook-verification-secret-name: "github-webhook-token"
+    k8s.ngrok.com/webhook-verification-secret-key: "SECRET_TOKEN"
 spec:
   ...
 ```

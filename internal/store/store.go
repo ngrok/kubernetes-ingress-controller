@@ -1,12 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,7 +15,6 @@ package store
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -30,13 +26,6 @@ import (
 
 	"github.com/go-logr/logr"
 )
-
-func keyFunc(obj interface{}) (string, error) {
-	v := reflect.Indirect(reflect.ValueOf(obj))
-	name := v.FieldByName("Name")
-	namespace := v.FieldByName("Namespace")
-	return namespace.String() + "/" + name.String(), nil
-}
 
 // Storer is the interface that wraps the required methods to gather information
 // about ingresses, services, secrets and ingress annotations.
@@ -118,8 +107,7 @@ func (s Store) GetIngressClassV1(name string) (*netv1.IngressClass, error) {
 
 // GetIngressV1 returns the 'name' Ingress resource.
 func (s Store) GetIngressV1(name, namespcae string) (*netv1.Ingress, error) {
-	// TODO:(initial-store) key forming should be in its own function
-	p, exists, err := s.stores.IngressV1.GetByKey(fmt.Sprintf("%v/%v", namespcae, name))
+	p, exists, err := s.stores.IngressV1.GetByKey(getKey(name, namespcae))
 	if err != nil {
 		return nil, err
 	}

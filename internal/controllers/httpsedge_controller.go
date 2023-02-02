@@ -31,10 +31,12 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/logr"
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
@@ -51,11 +53,14 @@ type HTTPSEdgeReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
+	ipPolicyResolver
+
 	NgrokClientset ngrokapi.Clientset
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *HTTPSEdgeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.ipPolicyResolver = ipPolicyResolver{client: mgr.GetClient()}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ingressv1alpha1.HTTPSEdge{}).
 		WithEventFilter(commonPredicateFilters).
@@ -221,7 +226,7 @@ func (r *HTTPSEdgeReconciler) reconcileRoutes(ctx context.Context, edge *ingress
 		if err := r.setEdgeRouteCompression(ctx, edge.Status.ID, route.ID, routeSpec.Compression); err != nil {
 			return err
 		}
-		if err := r.setEdgeRouteIPRestriction(ctx, edge.Status.ID, route.ID, routeSpec.IPRestriction); err != nil {
+		if err := r.setEdgeRouteIPRestriction(ctx, edge, route.ID, routeSpec.IPRestriction); err != nil {
 			return err
 		}
 		var requestHeaders *ingressv1alpha1.EndpointRequestHeaders
@@ -236,6 +241,9 @@ func (r *HTTPSEdgeReconciler) reconcileRoutes(ctx context.Context, edge *ingress
 			responseHeaders = routeSpec.Headers.Response
 		}
 		if err := r.setEdgeRouteResponseHeaders(ctx, edge.Status.ID, route.ID, responseHeaders); err != nil {
+			return err
+		}
+		if err := r.setEdgeRouteWebhookVerification(ctx, edge, route.ID, routeSpec.WebhookVerification); err != nil {
 			return err
 		}
 	}
@@ -279,16 +287,23 @@ func (r *HTTPSEdgeReconciler) setEdgeRouteCompression(ctx context.Context, edgeI
 	return err
 }
 
-func (r *HTTPSEdgeReconciler) setEdgeRouteIPRestriction(ctx context.Context, edgeID string, routeID string, ipRestriction *ingressv1alpha1.EndpointIPPolicy) error {
+func (r *HTTPSEdgeReconciler) setEdgeRouteIPRestriction(ctx context.Context, edge *ingressv1alpha1.HTTPSEdge, routeID string, ipRestriction *ingressv1alpha1.EndpointIPPolicy) error {
 	client := r.NgrokClientset.EdgeModules().HTTPS().Routes().IPRestriction()
-	if ipRestriction == nil || len(ipRestriction.IPPolicyIDs) == 0 {
-		return client.Delete(ctx, &ngrok.EdgeRouteItem{EdgeID: edgeID, ID: routeID})
+	if ipRestriction == nil || len(ipRestriction.IPPolicies) == 0 {
+		return client.Delete(ctx, &ngrok.EdgeRouteItem{EdgeID: edge.Status.ID, ID: routeID})
 	}
-	_, err := client.Replace(ctx, &ngrok.EdgeRouteIPRestrictionReplace{
-		EdgeID: edgeID,
+
+	policyIds, err := r.ipPolicyResolver.resolveIPPolicyNamesorIds(ctx, edge.Namespace, ipRestriction.IPPolicies)
+	if err != nil {
+		return err
+	}
+	r.Log.Info("Resolved IP Policy NamesOrIDs to IDs", "NamesOrIds", ipRestriction.IPPolicies, "policyIds", policyIds)
+
+	_, err = client.Replace(ctx, &ngrok.EdgeRouteIPRestrictionReplace{
+		EdgeID: edge.Status.ID,
 		ID:     routeID,
 		Module: ngrok.EndpointIPPolicyMutate{
-			IPPolicyIDs: ipRestriction.IPPolicyIDs,
+			IPPolicyIDs: policyIds,
 		},
 	})
 	return err
@@ -332,6 +347,39 @@ func (r *HTTPSEdgeReconciler) setEdgeRouteResponseHeaders(ctx context.Context, e
 
 	_, err := client.Replace(ctx, &ngrok.EdgeRouteResponseHeadersReplace{
 		EdgeID: edgeID,
+		ID:     routeID,
+		Module: module,
+	})
+	return err
+}
+
+func (r *HTTPSEdgeReconciler) setEdgeRouteWebhookVerification(ctx context.Context, edge *ingressv1alpha1.HTTPSEdge, routeID string, webhookVerification *ingressv1alpha1.EndpointWebhookVerification) error {
+	client := r.NgrokClientset.EdgeModules().HTTPS().Routes().WebhookVerification()
+	if webhookVerification == nil {
+		return client.Delete(ctx, &ngrok.EdgeRouteItem{EdgeID: edge.Status.ID, ID: routeID})
+	}
+
+	secret := &v1.Secret{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      webhookVerification.SecretRef.Name,
+		Namespace: edge.Namespace,
+	}, secret)
+	if err != nil {
+		return err
+	}
+
+	webhookSecret, ok := secret.Data[webhookVerification.SecretRef.Key]
+	if !ok {
+		return fmt.Errorf("secret %s/%s does not contain key %s", edge.Namespace, webhookVerification.SecretRef.Name, webhookVerification.SecretRef.Key)
+	}
+
+	module := ngrok.EndpointWebhookValidation{
+		Provider: webhookVerification.Provider,
+		Secret:   string(webhookSecret),
+	}
+
+	_, err = client.Replace(ctx, &ngrok.EdgeRouteWebhookVerificationReplace{
+		EdgeID: edge.Status.ID,
 		ID:     routeID,
 		Module: module,
 	})
@@ -419,6 +467,46 @@ func (r *HTTPSEdgeReconciler) getMatchingRouteFromEdgeStatus(edge *ingressv1alph
 		}
 	}
 	return nil
+}
+
+func (r *HTTPSEdgeReconciler) listHTTPSEdgesForIPPolicy(obj client.Object) []reconcile.Request {
+	r.Log.Info("Listing HTTPSEdges for ip policy to determine if they need to be reconciled")
+	policy, ok := obj.(*ingressv1alpha1.IPPolicy)
+	if !ok {
+		r.Log.Error(nil, "failed to convert object to IPPolicy", "object", obj)
+		return []reconcile.Request{}
+	}
+
+	edges := &ingressv1alpha1.HTTPSEdgeList{}
+	if err := r.Client.List(context.Background(), edges); err != nil {
+		r.Log.Error(err, "failed to list HTTPSEdges for ippolicy", "name", policy.Name, "namespace", policy.Namespace)
+		return []reconcile.Request{}
+	}
+
+	recs := []reconcile.Request{}
+
+	for _, edge := range edges.Items {
+		for _, route := range edge.Spec.Routes {
+			if route.IPRestriction == nil {
+				continue
+			}
+
+			for _, edgePolicyID := range route.IPRestriction.IPPolicies {
+				if edgePolicyID == policy.Name || edgePolicyID == policy.Status.ID {
+					recs = append(recs, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      edge.GetName(),
+							Namespace: edge.GetNamespace(),
+						},
+					})
+					break
+				}
+			}
+		}
+	}
+
+	r.Log.Info("IPPolicy change triggered HTTPSEdge reconciliation", "count", len(recs), "policy", policy.Name, "namespace", policy.Namespace)
+	return recs
 }
 
 // Tunnel Group Backend planner
