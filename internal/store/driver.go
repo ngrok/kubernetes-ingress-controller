@@ -27,12 +27,13 @@ const clusterDomain = "svc.cluster.local"                 // TODO: We can techni
 // Driver maintains the store of information, can derive new information from the store, and can
 // synchronize the desired state of the store to the actual state of the cluster.
 type Driver struct {
-	Storer // TODO:(initial-store) This should be private
+	Storer
 
-	cacheStores    CacheStores
-	log            logr.Logger
-	scheme         *runtime.Scheme
-	reentranceFlag int64
+	cacheStores           CacheStores
+	log                   logr.Logger
+	scheme                *runtime.Scheme
+	reentranceFlag        int64
+	bypassReentranceCheck bool
 }
 
 // NewDriver creates a new driver with a basic logger and cache store setup
@@ -55,6 +56,7 @@ func NewDriver(logger logr.Logger, scheme *runtime.Scheme) *Driver {
 // - Secrets
 // - Domains
 // - Edges
+// When the sync method becomes a background process, this likely won't be needed anymore
 func (d *Driver) Seed(ctx context.Context, c client.Reader) error {
 	ingresses := &netv1.IngressList{}
 	if err := c.List(ctx, ingresses); err != nil {
@@ -110,27 +112,34 @@ func (d *Driver) DeleteIngress(n types.NamespacedName) error {
 	return d.cacheStores.Delete(ingress)
 }
 
+// Sync calculates what the desired state for each of our CRDs should be based on the ingresses and other
+// objects in the store. It then compares that to the actual state of the cluster and updates the cluster
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	// This function gets called a lot in the current architecture. At the end it also syncs
 	// resources which in turn triggers more reconcile events. Its all eventually consistent, but
 	// its noisy and can make us hit ngrok api limits. We should probably just change this to be
 	// a periodic sync instead of a sync on every reconcile event, but for now this debouncer
 	// keeps it in check and syncs in batches
-	if atomic.CompareAndSwapInt64(&d.reentranceFlag, 0, 1) {
+	if !d.bypassReentranceCheck {
+		if atomic.CompareAndSwapInt64(&d.reentranceFlag, 0, 1) {
 
-		defer func() {
-			time.Sleep(10 * time.Second)
-			atomic.StoreInt64(&(d.reentranceFlag), 0)
-		}()
-	} else {
-		d.log.Info("sync already in progress, skipping")
-		return nil
+			defer func() {
+				time.Sleep(10 * time.Second)
+				atomic.StoreInt64(&(d.reentranceFlag), 0)
+			}()
+		} else {
+			d.log.Info("sync already in progress, skipping")
+			return nil
+		}
 	}
 
 	d.log.Info("syncing driver state!!")
 	desiredDomains := d.calculateDomains()
 	desiredEdges := d.calculateHTTPSEdges()
 	desiredTunnels := d.calculateTunnels()
+	fmt.Printf("desiredDomains: %v", desiredDomains)
+	fmt.Printf("desiredEdges: %v", desiredEdges)
+	fmt.Printf("desiredTunnels: %v", desiredTunnels)
 
 	currDomains := &ingressv1alpha1.DomainList{}
 	currEdges := &ingressv1alpha1.HTTPSEdgeList{}
@@ -152,7 +161,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	for _, desiredDomain := range desiredDomains {
 		found := false
 		for _, currDomain := range currDomains.Items {
-			if desiredDomain.Name == currDomain.Name {
+			if desiredDomain.Name == currDomain.Name && desiredDomain.Namespace == currDomain.Namespace {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
 					currDomain.Spec = desiredDomain.Spec
@@ -178,7 +187,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	for _, desiredEdge := range desiredEdges {
 		found := false
 		for _, currEdge := range currEdges.Items {
-			if desiredEdge.Name == currEdge.Name {
+			if desiredEdge.Name == currEdge.Name && desiredEdge.Namespace == currEdge.Namespace {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
 					currEdge.Spec = desiredEdge.Spec
@@ -202,7 +211,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	for _, existingEdge := range currEdges.Items {
 		found := false
 		for _, desiredEdge := range desiredEdges {
-			if desiredEdge.Name == existingEdge.Name {
+			if desiredEdge.Name == existingEdge.Name && desiredEdge.Namespace == existingEdge.Namespace {
 				found = true
 				break
 			}
@@ -218,7 +227,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	for _, desiredTunnel := range desiredTunnels {
 		found := false
 		for _, currTunnel := range currTunnels.Items {
-			if desiredTunnel.Name == currTunnel.Name {
+			if desiredTunnel.Name == currTunnel.Name && desiredTunnel.Namespace == currTunnel.Namespace {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
 					currTunnel.Spec = desiredTunnel.Spec
@@ -243,7 +252,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	for _, existingTunnel := range currTunnels.Items {
 		found := false
 		for _, desiredTunnel := range desiredTunnels {
-			if desiredTunnel.Name == existingTunnel.Name {
+			if desiredTunnel.Name == existingTunnel.Name && desiredTunnel.Namespace == existingTunnel.Namespace {
 				found = true
 				break
 			}
@@ -256,7 +265,21 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 		}
 	}
 
-	// TODO:(initial-store) - update the ingress objects status with the load balancer hostname
+	return d.updateIngressStatuses(ctx, c)
+}
+
+func (d *Driver) updateIngressStatuses(ctx context.Context, c client.Client) error {
+	ingresses := d.ListNgrokIngressesV1()
+	for _, ingress := range ingresses {
+		newLBIPStatus := d.calculateIngressLoadBalancerIPStatus(ingress)
+		if !reflect.DeepEqual(ingress.Status.LoadBalancer.Ingress, newLBIPStatus) {
+			ingress.Status.LoadBalancer.Ingress = newLBIPStatus
+			if err := c.Update(ctx, ingress); err != nil {
+				d.log.Error(err, "error updating ingress status", "ingress", ingress)
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -305,6 +328,7 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 		for _, ingress := range ingresses {
 			for _, rule := range ingress.Spec.Rules {
 				// If any rule for an ingress matches, then it applies to this ingress
+				// TODO: Handle routes without hosts that then apply to all edges
 				if rule.Host == domain.Spec.Domain {
 					// If any of them have the tls termination annotation, then we should set it for the whole edge
 					parsedRouteModules := annotations.NewAnnotationsExtractor().Extract(ingress)
@@ -312,18 +336,20 @@ func (d *Driver) calculateHTTPSEdges() []ingressv1alpha1.HTTPSEdge {
 						edge.Spec.TLSTermination = parsedRouteModules.TLSTermination
 					}
 
-					var matchType string
 					for _, httpIngressPath := range rule.HTTP.Paths {
-						switch *httpIngressPath.PathType {
-						case netv1.PathTypePrefix:
-							matchType = "path_prefix"
-						case netv1.PathTypeExact:
-							matchType = "exact_path"
-						case netv1.PathTypeImplementationSpecific:
-							matchType = "path_prefix" // Path Prefix seems like a sane default for most cases
-						default:
-							d.log.Error(fmt.Errorf("unknown path type"), "unknown path type", "pathType", *httpIngressPath.PathType)
-							return nil
+						matchType := "path_prefix"
+						if httpIngressPath.PathType != nil {
+							switch *httpIngressPath.PathType {
+							case netv1.PathTypePrefix:
+								matchType = "path_prefix"
+							case netv1.PathTypeExact:
+								matchType = "exact_path"
+							case netv1.PathTypeImplementationSpecific:
+								matchType = "path_prefix" // Path Prefix seems like a sane default for most cases
+							default:
+								d.log.Error(fmt.Errorf("unknown path type"), "unknown path type", "pathType", *httpIngressPath.PathType)
+								return nil
+							}
 						}
 
 						route := ingressv1alpha1.HTTPSEdgeRouteSpec{
@@ -357,9 +383,6 @@ func (d *Driver) calculateTunnels() []ingressv1alpha1.Tunnel {
 	ingresses := d.ListNgrokIngressesV1()
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Spec.Rules {
-			if rule.Host == "" {
-				continue
-			}
 			for _, path := range rule.HTTP.Paths {
 				serviceName := path.Backend.Service.Name
 				servicePort := path.Backend.Service.Port.Number
@@ -385,6 +408,24 @@ func (d *Driver) calculateTunnels() []ingressv1alpha1.Tunnel {
 		tunnels = append(tunnels, tunnel)
 	}
 	return tunnels
+}
+
+func (d *Driver) calculateIngressLoadBalancerIPStatus(ing *netv1.Ingress) []netv1.IngressLoadBalancerIngress {
+	domains := d.calculateDomains()
+	status := []netv1.IngressLoadBalancerIngress{}
+	for _, rule := range ing.Spec.Rules {
+		// TODO: Handle rules without hosts
+		if rule.Host != "" {
+			for _, domain := range domains {
+				if rule.Host == domain.Spec.Domain && &domain.Status != nil && domain.Status.CNAMETarget != nil {
+					status = append(status, netv1.IngressLoadBalancerIngress{
+						IP: *domain.Status.CNAMETarget,
+					})
+				}
+			}
+		}
+	}
+	return status
 }
 
 // Generates a labels map for matching ngrok Routes to Agent Tunnels
