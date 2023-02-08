@@ -50,7 +50,7 @@ var _ = Describe("Store", func() {
 	var _ = Describe("GetIngressV1", func() {
 		Context("when the ingress exists", func() {
 			BeforeEach(func() {
-				ing := NewTestIngressV1("test-ingress", "test-namespace")
+				ing := NewBasicTestIngressV1("test-ingress", "test-namespace")
 				store.Add(&ing)
 			})
 			It("returns the ingress", func() {
@@ -90,7 +90,7 @@ var _ = Describe("Store", func() {
 				Expect(ing).To(BeNil())
 			})
 			It("Filters finds ones without a class if we are default", func() {
-				ingNoClass := NewTestIngressV1("ingNoClass", "test-namespace")
+				ingNoClass := NewBasicTestIngressV1("ingNoClass", "test-namespace")
 				store.Add(&ingNoClass)
 
 				ing, err := store.GetNgrokIngressV1("ingNoClass", "test-namespace")
@@ -139,7 +139,7 @@ var _ = Describe("Store", func() {
 		var _ = DescribeTable("IngressClassFiltering", func(ingressClasses []netv1.IngressClass, expectedMatchingIngressesCount int) {
 			iMatching := NewTestIngressV1WithClass("test1", "test", "ngrok")
 			iNotMatching := NewTestIngressV1WithClass("test2", "test", "test")
-			iNoClass := NewTestIngressV1("test3", "test")
+			iNoClass := NewBasicTestIngressV1("test3", "test")
 			store.Add(&iMatching)
 			store.Add(&iNotMatching)
 			store.Add(&iNoClass)

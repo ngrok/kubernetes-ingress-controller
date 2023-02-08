@@ -31,22 +31,42 @@ func NewTestIngressClass(name string, isDefault bool, isNgrok bool) netv1.Ingres
 	return i
 }
 
+type TestIngressOpts struct {
+	name         string
+	namespace    string
+	ingressClass string
+	domainName   string
+}
+
 func NewTestIngressV1WithClass(name string, namespace string, ingressClass string) netv1.Ingress {
-	i := NewTestIngressV1(name, namespace)
+	i := NewTestIngressV1(TestIngressOpts{
+		name:         name,
+		namespace:    namespace,
+		ingressClass: ingressClass,
+	})
 	i.Spec.IngressClassName = &ingressClass
 	return i
 }
 
-func NewTestIngressV1(name string, namespace string) netv1.Ingress {
+func NewBasicTestIngressV1(name string, namespce string) netv1.Ingress {
+	return NewTestIngressV1(TestIngressOpts{
+		name:         name,
+		namespace:    namespce,
+		ingressClass: "ngrok",
+		domainName:   "example.com",
+	})
+}
+
+func NewTestIngressV1(opts TestIngressOpts) netv1.Ingress {
 	return netv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:      opts.name,
+			Namespace: opts.namespace,
 		},
 		Spec: netv1.IngressSpec{
 			Rules: []netv1.IngressRule{
 				{
-					Host: "example.com",
+					Host: opts.domainName,
 					IngressRuleValue: netv1.IngressRuleValue{
 						HTTP: &netv1.HTTPIngressRuleValue{
 							Paths: []netv1.HTTPIngressPath{

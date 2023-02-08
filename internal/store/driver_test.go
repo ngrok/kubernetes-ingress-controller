@@ -35,8 +35,8 @@ var _ = Describe("Driver", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 		It("Should add all the found items to the store", func() {
-			i1 := NewTestIngressV1("test-ingress", "test-namespace")
-			i2 := NewTestIngressV1("test-ingress-2", "test-namespace")
+			i1 := NewBasicTestIngressV1("test-ingress", "test-namespace")
+			i2 := NewBasicTestIngressV1("test-ingress-2", "test-namespace")
 			ic1 := NewTestIngressClass("test-ingress-class", true, true)
 			ic2 := NewTestIngressClass("test-ingress-class-2", true, true)
 			d1 := NewDomainV1("test-domain.com", "test-namespace")
@@ -61,7 +61,7 @@ var _ = Describe("Driver", func() {
 
 	Describe("DeleteIngress", func() {
 		It("Should remove the ingress from the store", func() {
-			i1 := NewTestIngressV1("test-ingress", "test-namespace")
+			i1 := NewBasicTestIngressV1("test-ingress", "test-namespace")
 			c := fake.NewFakeClientWithScheme(scheme, &i1)
 			err := driver.Seed(context.Background(), c)
 			Expect(err).ToNot(HaveOccurred())
@@ -104,8 +104,8 @@ var _ = Describe("Driver", func() {
 		})
 		Context("When there are just ingresses and CRDs need to be created", func() {
 			It("Should create the CRDs", func() {
-				i1 := NewTestIngressV1("test-ingress", "test-namespace")
-				i2 := NewTestIngressV1("test-ingress-2", "test-namespace")
+				i1 := NewBasicTestIngressV1("test-ingress", "test-namespace")
+				i2 := NewBasicTestIngressV1("test-ingress-2", "test-namespace")
 				ic1 := NewTestIngressClass("test-ingress-class", true, true)
 				ic2 := NewTestIngressClass("test-ingress-class-2", true, true)
 				obs := []runtime.Object{&ic1, &ic2, &i1, &i2}
@@ -146,5 +146,58 @@ var _ = Describe("Driver", func() {
 				Expect(foundTunnel).ToNot(BeNil())
 			})
 		})
+	})
+
+	Describe("calculateDomains", func() {
+		BeforeEach(func() {
+			ic1 := NewTestIngressClass("ngrok", true, true)
+			obs := []runtime.Object{&ic1}
+			c := fake.NewFakeClientWithScheme(scheme, obs...)
+
+			for _, obj := range obs {
+				err := driver.Update(obj)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			err := driver.Seed(context.Background(), c)
+			Expect(err).ToNot(HaveOccurred())
+
+			// add ingresses
+			i1 := NewBasicTestIngressV1("test-ingress", "test-namespace")
+			i2 := NewBasicTestIngressV1("test-ingress-2", "test-namespace")
+			i3 := NewBasicTestIngressV1("test-ingress-3", "test-namespace")
+			i3.Spec.Rules[0].Host = ""
+			err = driver.Update(&i1)
+			Expect(err).ToNot(HaveOccurred())
+			err = driver.Update(&i2)
+			Expect(err).ToNot(HaveOccurred())
+			err = driver.Update(&i3)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Should return the correct domain when there are duplicates", func() {
+			domains := driver.calculateDomains()
+			Expect(domains).To(HaveLen(1))
+			Expect(domains[0].Spec.Domain).To(Equal("example.com"))
+		})
+
+		It("Should return the correct domain when there are multiple domains", func() {
+			i4 := NewBasicTestIngressV1("test-ingress-4", "test-namespace")
+			i4.Spec.Rules[0].Host = "example2.com"
+			err := driver.Update(&i4)
+			Expect(err).ToNot(HaveOccurred())
+
+			domains := driver.calculateDomains()
+			Expect(domains).To(HaveLen(2))
+			Expect(domains[0].Spec.Domain).To(Equal("example.com"))
+			Expect(domains[1].Spec.Domain).To(Equal("example2.com"))
+		})
+	})
+
+	Describe("calculateHTTPSEdges", func() {
+
+	})
+
+	Describe("calculateTunnels", func() {
+
 	})
 })
