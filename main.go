@@ -42,6 +42,7 @@ import (
 	"github.com/ngrok/ngrok-api-go/v5"
 
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/controllers"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/ngrokapi"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
@@ -152,13 +153,14 @@ func runController(ctx context.Context, opts managerOpts) error {
 	}
 
 	if err := (&controllers.IngressReconciler{
-		Client:    mgr.GetClient(),
-		Log:       ctrl.Log.WithName("controllers").WithName("ingress"),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("ingress-controller"),
-		Namespace: opts.namespace,
-		Driver:    driver,
-	}).SetupWithManager(mgr, driver); err != nil {
+		Client:               mgr.GetClient(),
+		Log:                  ctrl.Log.WithName("controllers").WithName("ingress"),
+		Scheme:               mgr.GetScheme(),
+		Recorder:             mgr.GetEventRecorderFor("ingress-controller"),
+		Namespace:            opts.namespace,
+		AnnotationsExtractor: annotations.NewAnnotationsExtractor(),
+		Driver:               driver,
+	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create ingress controller: %w", err)
 	}
 

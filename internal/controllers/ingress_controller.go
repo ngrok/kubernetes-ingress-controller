@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-logr/logr"
 	ingressv1alpha1 "github.com/ngrok/kubernetes-ingress-controller/api/v1alpha1"
+	"github.com/ngrok/kubernetes-ingress-controller/internal/annotations"
 	internalerrors "github.com/ngrok/kubernetes-ingress-controller/internal/errors"
 	"github.com/ngrok/kubernetes-ingress-controller/internal/store"
 	netv1 "k8s.io/api/networking/v1"
@@ -20,15 +21,15 @@ import (
 // https://pkg.go.dev/sigs.k8s.io/controller-runtime#section-readme
 type IngressReconciler struct {
 	client.Client
-	Log       logr.Logger
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
-	Namespace string
-	Driver    *store.Driver
+	Log                  logr.Logger
+	Scheme               *runtime.Scheme
+	Recorder             record.EventRecorder
+	Namespace            string
+	AnnotationsExtractor annotations.Extractor
+	Driver               *store.Driver
 }
 
-// Create a new controller using our reconciler and set it up with the manager
-func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Driver) error {
+func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	storedResources := []client.Object{
 		&netv1.IngressClass{},
 		&ingressv1alpha1.Domain{},
@@ -40,7 +41,7 @@ func (irec *IngressReconciler) SetupWithManager(mgr ctrl.Manager, d *store.Drive
 	for _, obj := range storedResources {
 		builder = builder.Watches(
 			&source.Kind{Type: obj},
-			store.NewUpdateStoreHandler(obj.GetObjectKind().GroupVersionKind().Kind, d))
+			store.NewUpdateStoreHandler(obj.GetObjectKind().GroupVersionKind().Kind, irec.Driver))
 	}
 
 	return builder.Complete(irec)
@@ -116,8 +117,9 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 		}
-		// Stop reconciliation as the item is being deleted
-		return ctrl.Result{}, nil
+
+		// Stop reconciliation as the item is being deleted and remove it from the store
+		return ctrl.Result{}, irec.Driver.Delete(ingress)
 	}
 
 	return irec.reconcileAll(ctx, ingress)
