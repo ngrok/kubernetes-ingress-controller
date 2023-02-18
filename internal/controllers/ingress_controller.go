@@ -73,12 +73,6 @@ func (irec *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 
-		err = irec.Driver.Sync(ctx, irec.Client)
-		if err != nil {
-			log.Error(err, "Failed to sync after removing ingress from store")
-			return ctrl.Result{}, err
-		}
-
 		return ctrl.Result{}, nil
 	}
 
@@ -142,12 +136,6 @@ func (irec *IngressReconciler) reconcileAll(ctx context.Context, ingress *netv1.
 	err := irec.Driver.Update(ingress)
 	if err != nil {
 		log.Error(err, "Failed to add ingress to store")
-		return ctrl.Result{}, err
-	}
-
-	err = irec.Driver.Sync(ctx, irec.Client)
-	if err != nil {
-		log.Error(err, "Failed to sync ingress to store")
 		return ctrl.Result{}, err
 	}
 

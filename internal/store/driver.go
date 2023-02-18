@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -32,7 +31,6 @@ type Driver struct {
 	cacheStores           CacheStores
 	log                   logr.Logger
 	scheme                *runtime.Scheme
-	reentranceFlag        int64
 	bypassReentranceCheck bool
 }
 
@@ -112,34 +110,29 @@ func (d *Driver) DeleteIngress(n types.NamespacedName) error {
 	return d.cacheStores.Delete(ingress)
 }
 
+// BackgroundSync creates a go routine background process that will call d.Sync every 10 seconds
+func (d *Driver) BackgroundSync(ctx context.Context, c client.Client) error {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+				if err := d.Sync(ctx, c); err != nil {
+					d.log.Error(err, "error syncing driver state")
+				}
+			}
+		}
+	}()
+	return nil
+}
+
 // Sync calculates what the desired state for each of our CRDs should be based on the ingresses and other
 // objects in the store. It then compares that to the actual state of the cluster and updates the cluster
 func (d *Driver) Sync(ctx context.Context, c client.Client) error {
-	// This function gets called a lot in the current architecture. At the end it also syncs
-	// resources which in turn triggers more reconcile events. Its all eventually consistent, but
-	// its noisy and can make us hit ngrok api limits. We should probably just change this to be
-	// a periodic sync instead of a sync on every reconcile event, but for now this debouncer
-	// keeps it in check and syncs in batches
-	if !d.bypassReentranceCheck {
-		if atomic.CompareAndSwapInt64(&d.reentranceFlag, 0, 1) {
-
-			defer func() {
-				time.Sleep(10 * time.Second)
-				atomic.StoreInt64(&(d.reentranceFlag), 0)
-			}()
-		} else {
-			d.log.Info("sync already in progress, skipping")
-			return nil
-		}
-	}
-
-	d.log.Info("syncing driver state!!")
 	desiredDomains := d.calculateDomains()
 	desiredEdges := d.calculateHTTPSEdges()
 	desiredTunnels := d.calculateTunnels()
-	fmt.Printf("desiredDomains: %v", desiredDomains)
-	fmt.Printf("desiredEdges: %v", desiredEdges)
-	fmt.Printf("desiredTunnels: %v", desiredTunnels)
 
 	currDomains := &ingressv1alpha1.DomainList{}
 	currEdges := &ingressv1alpha1.HTTPSEdgeList{}

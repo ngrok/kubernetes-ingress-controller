@@ -267,5 +267,7 @@ func getDriver(ctx context.Context, mgr manager.Manager) (*store.Driver, error) 
 		)
 	}
 
+	d.BackgroundSync(ctx, mgr.GetClient())
+
 	return d, nil
 }
