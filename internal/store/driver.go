@@ -120,11 +120,14 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 	// its noisy and can make us hit ngrok api limits. We should probably just change this to be
 	// a periodic sync instead of a sync on every reconcile event, but for now this debouncer
 	// keeps it in check and syncs in batches
+	var changed bool
 	if !d.bypassReentranceCheck {
 		if atomic.CompareAndSwapInt64(&d.reentranceFlag, 0, 1) {
-
+			changed = false
 			defer func() {
-				time.Sleep(10 * time.Second)
+				if changed { // Only sleep at the end if we actually changed something
+					time.Sleep(10 * time.Second)
+				}
 				atomic.StoreInt64(&(d.reentranceFlag), 0)
 			}()
 		} else {
@@ -165,6 +168,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredDomain.Spec, currDomain.Spec) {
 					currDomain.Spec = desiredDomain.Spec
+					changed = true
 					if err := c.Update(ctx, &currDomain); err != nil {
 						d.log.Error(err, "error updating domain", "domain", desiredDomain)
 						return err
@@ -175,6 +179,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			}
 		}
 		if !found {
+			changed = true
 			if err := c.Create(ctx, &desiredDomain); err != nil {
 				d.log.Error(err, "error creating domain", "domain", desiredDomain)
 				return err
@@ -191,6 +196,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredEdge.Spec, currEdge.Spec) {
 					currEdge.Spec = desiredEdge.Spec
+					changed = true
 					if err := c.Update(ctx, &currEdge); err != nil {
 						d.log.Error(err, "error updating edge", "desiredEdge", desiredEdge, "currEdge", currEdge)
 						return err
@@ -201,6 +207,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			}
 		}
 		if !found {
+			changed = true
 			if err := c.Create(ctx, &desiredEdge); err != nil {
 				return err
 			}
@@ -231,6 +238,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 				// It matches so lets update it if anything is different
 				if !reflect.DeepEqual(desiredTunnel.Spec, currTunnel.Spec) {
 					currTunnel.Spec = desiredTunnel.Spec
+					changed = true
 					if err := c.Update(ctx, &currTunnel); err != nil {
 						d.log.Error(err, "error updating tunnel", "tunnel", desiredTunnel)
 						return err
@@ -241,6 +249,7 @@ func (d *Driver) Sync(ctx context.Context, c client.Client) error {
 			}
 		}
 		if !found {
+			changed = true
 			if err := c.Create(ctx, &desiredTunnel); err != nil {
 				d.log.Error(err, "error creating tunnel", "tunnel", desiredTunnel)
 				return err
@@ -274,6 +283,7 @@ func (d *Driver) updateIngressStatuses(ctx context.Context, c client.Client) err
 		newLBIPStatus := d.calculateIngressLoadBalancerIPStatus(ingress)
 		if !reflect.DeepEqual(ingress.Status.LoadBalancer.Ingress, newLBIPStatus) {
 			ingress.Status.LoadBalancer.Ingress = newLBIPStatus
+			// TODO: changed = true
 			if err := c.Update(ctx, ingress); err != nil {
 				d.log.Error(err, "error updating ingress status", "ingress", ingress)
 				return err
