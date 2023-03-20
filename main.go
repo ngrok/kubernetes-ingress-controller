@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -127,8 +129,24 @@ func runController(ctx context.Context, opts managerOpts) error {
 		return errors.New("NGROK_API_KEY environment variable should be set, but was not")
 	}
 
+	customCertPool, err := tunneldriver.CaCerts()
+
+	if err != nil {
+		setupLog.Error(err, "failed to load custom CA certs")
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				RootCAs:            customCertPool,
+			},
+		},
+	}
+
 	clientConfigOpts := []ngrok.ClientConfigOption{
 		ngrok.WithUserAgent("ngrok-ingress-controller/v1-alpha"),
+		ngrok.WithHTTPClient(client),
 	}
 
 	ngrokClientConfig := ngrok.NewClientConfig(opts.ngrokAPIKey, clientConfigOpts...)

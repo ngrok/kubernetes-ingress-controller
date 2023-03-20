@@ -51,7 +51,7 @@ func New(opts TunnelDriverOpts) (*TunnelDriver, error) {
 
 	// Only configure custom certs if the directory exists
 	if _, err := os.Stat(customCertsPath); !os.IsNotExist(err) {
-		caCerts, err := caCerts()
+		caCerts, err := CaCerts()
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +69,7 @@ func New(opts TunnelDriverOpts) (*TunnelDriver, error) {
 }
 
 // caCerts combines the system ca certs with a directory of custom ca certs
-func caCerts() (*x509.CertPool, error) {
+func CaCerts() (*x509.CertPool, error) {
 	systemCertPool, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, err
