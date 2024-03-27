@@ -1,3 +1,4 @@
+REGISTRY ?= localhost:5001
 
 # Image URL to use all building/pushing image targets
 IMG ?= kubernetes-ingress-controller
@@ -94,11 +95,11 @@ run: manifests generate fmt vet ## Run a controller from your host.
 
 .PHONY: docker-build
 docker-build: test ## Build docker image with the manager.
-	DOCKER_BUILDKIT=1 docker build -t ${IMG} .
+	DOCKER_BUILDKIT=1 docker build -t ${REGISTRY}/${IMG} .
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	docker push ${IMG}
+docker-push: docker-build ## Push docker image with the manager.
+	docker push ${REGISTRY}/${IMG}
 
 ##@ Deployment
 
@@ -115,12 +116,14 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	$(KUSTOMIZE) build config/crd | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: _deploy-check-env-vars docker-build manifests kustomize _helm_setup ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+deploy: _deploy-check-env-vars docker-push manifests kustomize _helm_setup ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	helm upgrade ngrok-ingress-controller $(HELM_CHART_DIR) --install \
 		--namespace ngrok-ingress-controller \
 		--create-namespace \
+		--set image.registry=$(REGISTRY) \
 		--set image.repository=$(IMG) \
 		--set image.tag="latest" \
+		--set image.pullPolicy="Always" \
 		--set podAnnotations."k8s\.ngrok\.com/test"="\{\"env\": \"local\"\}" \
 		--set credentials.apiKey=$(NGROK_API_KEY) \
 		--set credentials.authtoken=$(NGROK_AUTHTOKEN) \
