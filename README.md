@@ -1,3 +1,9 @@
+## <img src="docs/achtung.png" alt="WARNING" width="30" height="30"><img src="docs/achtung.png" alt="WARNING" width="30" height="30"><img src="docs/achtung.png" alt="WARNING" width="30" height="30"> Notice <img src="docs/achtung.png" alt="WARNING" width="30" height="30"><img src="docs/achtung.png" alt="WARNING" width="30" height="30"><img src="docs/achtung.png" alt="WARNING" width="30" height="30">
+
+
+The ngrok/kubernetes-ingress-controller repository has been archived as part of our transition to developing the [ngrok-operator](https://github.com/ngrok/ngrok-operator) and expanding its set of features. For more information, please see [this discussion](https://github.com/ngrok/kubernetes-ingress-controller/discussions/4).
+
+
 <p>
   <a href="https://ngrok.com">
     <img src="docs/assets/images/ngrok-blue-lrg.png" alt="ngrok Logo" width="300" url="https://ngrok.com" />
@@ -27,6 +33,8 @@
     <img src="https://img.shields.io/twitter/follow/ngrokHQ.svg?style=social&label=Follow" alt="Twitter"/>
   </a>
 </p>
+
+
 
 # ngrok Kubernetes Operator
 
